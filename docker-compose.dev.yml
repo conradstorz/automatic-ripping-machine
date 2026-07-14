@@ -1,0 +1,40 @@
+# Local development environment for ARM ripper-logic work (non-hardware).
+# Usage is documented in CLAUDE.md, section "Local development (Docker)".
+#
+# This is additive and never used in production. It builds the same Dockerfile
+# but runs without optical-device passthrough, so physical ripping cannot occur.
+services:
+  arm-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: arm-dev:local
+    container_name: arm-dev
+    # Required for udev/mount behaviour the container expects. Safe locally.
+    privileged: true
+    ports:
+      - "8080:8080"
+    environment:
+      ARM_UID: "1000"
+      ARM_GID: "1000"
+      TZ: "Etc/UTC"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # Live source: host edits are visible immediately inside the container.
+      - .:/opt/arm
+      # Persistent state (SQLite DB, media, logs, staged config).
+      - arm-home:/home/arm
+      - arm-config:/etc/arm/config
+    # Fix ownership of freshly-created named volumes (root-owned by default) so
+    # ARM's boot-time ownership check passes, then hand off to the real init.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - >-
+        mkdir -p /home/arm /etc/arm/config &&
+        chown "$${ARM_UID}:$${ARM_GID}" /home/arm /etc/arm/config &&
+        exec /sbin/my_init
+
+volumes:
+  arm-home:
+  arm-config:
