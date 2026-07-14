@@ -61,6 +61,7 @@ def view_database():
 
 
 @route_database.route('/dbupdate', methods=['POST'])
+@login_required
 def update_database():
     """
     Update the ARM database when changes are made or the arm db file is missing
