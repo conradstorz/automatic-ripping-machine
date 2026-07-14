@@ -216,6 +216,7 @@ cython_debug/
 .dockerignore
 .gitignore
 .gitmodules
+Autorippr/
 
 *.yml
 *.md

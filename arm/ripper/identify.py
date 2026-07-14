@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Identification of dvd/bluray"""
+# Defer annotation evaluation so PEP 604 unions (e.g. ``str | None``) parse on
+# Python 3.9, which the project still supports. Must precede other imports.
+from __future__ import annotations
 
 import os
 import logging
