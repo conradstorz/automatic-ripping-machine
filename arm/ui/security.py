@@ -14,10 +14,10 @@ def load_or_create_secret_key(config_dir: str) -> str:
     """Return a stable Flask secret key, persisted in ``config_dir``.
 
     Reads ``<config_dir>/secret_key`` if it exists and is non-empty; otherwise
-    generates a new key, writes it with owner-only permissions, and returns it.
-    If the directory cannot be read or written, logs a warning and returns a
-    fresh in-memory key so the app still boots (sessions will not survive a
-    restart in that degraded case).
+    generates a new key and writes it with owner-only permissions. If the
+    directory cannot be read or written, logs a warning and returns the
+    freshly generated key for this run (sessions will not survive a restart in
+    that degraded case).
     """
     key_path = os.path.join(config_dir, SECRET_KEY_FILENAME)
     try:
@@ -26,16 +26,26 @@ def load_or_create_secret_key(config_dir: str) -> str:
                 existing = key_file.read().strip()
             if existing:
                 return existing
-        key = secrets.token_hex(32)
-        with open(key_path, "w", encoding="utf-8") as key_file:
-            key_file.write(key)
-        os.chmod(key_path, 0o600)
-        return key
     except OSError as error:
         logging.warning(
-            "Could not read or persist secret key in %s (%s); "
+            "Could not read secret key in %s (%s); regenerating.",
+            config_dir, error)
+
+    key = secrets.token_hex(32)
+    try:
+        # Create with owner-only perms from the start (no world-readable
+        # window); O_TRUNC handles an existing empty/partial file.
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, key.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.chmod(key_path, 0o600)
+    except OSError as error:
+        logging.warning(
+            "Could not persist secret key in %s (%s); "
             "using a temporary key for this run.", config_dir, error)
-        return secrets.token_hex(32)
+    return key
 
 
 def generate_debug_pin() -> str:

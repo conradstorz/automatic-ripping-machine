@@ -38,9 +38,13 @@ class TestUiSecurity(unittest.TestCase):
                 self.assertEqual(f.read().strip(), key)
 
     def test_unwritable_dir_falls_back(self):
-        """A non-existent/unwritable dir yields a key without raising."""
-        key = load_or_create_secret_key("/nonexistent/definitely/not/here")
-        self.assertTrue(key)
+        """A dir that cannot be written yields a key without raising or persisting."""
+        with tempfile.NamedTemporaryFile() as parent_file:
+            # Parent is a regular file -> opening a child path raises OSError.
+            bogus_dir = os.path.join(parent_file.name, "sub")
+            key = load_or_create_secret_key(bogus_dir)
+            self.assertTrue(key)
+            self.assertFalse(os.path.exists(os.path.join(bogus_dir, "secret_key")))
 
     def test_debug_pin_is_random_nonempty(self):
         """generate_debug_pin returns a non-empty string that isn't the old constant."""

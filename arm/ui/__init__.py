@@ -56,7 +56,6 @@ app.config['SECRET_KEY'] = load_or_create_secret_key(os.path.dirname(cfg.arm_con
 # Set the global Flask Login state, set to True will ignore any @login_required
 app.config['LOGIN_DISABLED'] = cfg.arm_config['DISABLE_LOGIN']
 app.logger.debug(f"Disable Login: {cfg.arm_config['DISABLE_LOGIN']}")
-# Set debug pin as it is hidden normally
 # Randomize the Werkzeug debugger PIN each start; never log its value.
 os.environ["WERKZEUG_DEBUG_PIN"] = generate_debug_pin()
 app.logger.debug("Werkzeug debug PIN randomized")
