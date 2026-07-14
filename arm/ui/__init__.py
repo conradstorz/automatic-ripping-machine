@@ -62,6 +62,18 @@ app.logger.debug("Debugging pin: " + os.environ["WERKZEUG_DEBUG_PIN"])
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
+
+@app.context_processor
+def inject_dev_server():
+    """Expose a dev-server flag to every template.
+
+    Set ARM_DEV_SERVER=1 (done in docker-compose.dev.yml) to render a
+    site-wide "development server" banner. Never set in production.
+    """
+    flag = os.environ.get("ARM_DEV_SERVER", "").strip().lower()
+    return {"dev_server": flag in ("1", "true", "yes", "on")}
+
+
 # Register route blueprints
 # loaded post database declaration to avoid circular loops
 from arm.ui.settings.settings import route_settings  # noqa: E402,F811

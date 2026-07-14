@@ -3,6 +3,8 @@
     <!-- HTML Header -->
     {% include 'head.html' %}
     <body style="padding: 70px 15px 50px;">
+        <!-- Dev-server banner (only rendered when ARM_DEV_SERVER is set) -->
+        {% include 'dev_banner.html' %}
         <!-- HTML Navigation -->
         {% include 'nav.html' %}
         <!-- Errors -->

@@ -1,0 +1,29 @@
+{# Site-wide development-server banner. Rendered only when dev_server is true
+   (ARM_DEV_SERVER env var, injected by the inject_dev_server context processor).
+   The CSS lives inside this dev-only include, so the layout shifts it applies
+   to the fixed navbar/body only take effect in the dev environment. #}
+{% if dev_server %}
+<style>
+    #devServerBanner {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 30px;
+        line-height: 30px;
+        z-index: 2000;
+        background: repeating-linear-gradient(
+            45deg, #d9534f, #d9534f 20px, #c9302c 20px, #c9302c 40px);
+        color: #fff;
+        font-weight: 700;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        text-align: center;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+    }
+    /* Push the fixed navbar and page body down so the banner never overlaps. */
+    .navbar.fixed-top { top: 30px; }
+    body { padding-top: 100px !important; }
+</style>
+<div id="devServerBanner">&#9888; Development Server &mdash; not production &#9888;</div>
+{% endif %}

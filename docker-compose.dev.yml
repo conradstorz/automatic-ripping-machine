@@ -25,6 +25,8 @@ services:
       ARM_GID: "1000"
       TZ: "Etc/UTC"
       PYTHONUNBUFFERED: "1"
+      # Renders a site-wide "development server" banner in the UI. Never set in production.
+      ARM_DEV_SERVER: "1"
     volumes:
       # Persistent state (SQLite DB, media, logs, staged config).
       # No source bind mount: source is baked into the image (see header note).
