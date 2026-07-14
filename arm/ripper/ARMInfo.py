@@ -49,7 +49,9 @@ class ARMInfo:
         branch_len = 10
         cmd = f"cd {self.install_path} && git branch && git log -1"
         git_output = ProcessHandler.arm_subprocess(cmd, True)
-        git_regex = r"\*\s(\S+)\n(?:\s*\S*\n){1,10}(?:commit )([a-z\d]{5,7})"
+        # {0,10}: allow zero intervening lines so single-branch repos parse
+        # (git branch prints only "* <branch>" before git log's "commit <hash>").
+        git_regex = r"\*\s(\S+)\n(?:\s*\S*\n){0,10}(?:commit )([a-z\d]{5,7})"
         git_match = re.search(git_regex, git_output)
 
         if git_match:
