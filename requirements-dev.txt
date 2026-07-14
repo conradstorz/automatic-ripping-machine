@@ -1,0 +1,4 @@
+# Development-only dependencies for the docker-compose dev environment.
+# Installed inside the arm-dev container (see CLAUDE.md "Local development").
+pytest
+flake8==7.3.0
