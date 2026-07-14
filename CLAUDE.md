@@ -72,3 +72,58 @@ python ./arm/runui.py
 - **Job lifecycle** is DB-driven: the ripper mutates a `Job` row through `JobState` values and `db.session.commit()`s; the UI polls those rows. When touching rip flow, keep the job status/stage transitions intact — the setup code specifically installs a SIGTERM handler so `finally:` blocks run and the DB isn't left mid-transaction.
 - **Security notes**: `arm/ui/__init__.py` currently hardcodes `SECRET_KEY` and the Werkzeug debug PIN (both marked TODO). Login can be disabled globally via the `DISABLE_LOGIN` config key.
 - CI also runs CodeQL (python + javascript) and a shellcheck workflow for the shell scripts under `scripts/`.
+
+## Local development (Docker)
+
+`docker-compose.dev.yml` provides a container for working on ARM's **non-hardware
+ripper logic** (identification, metadata, file naming, notifications, config). It builds
+the production `Dockerfile` but runs without optical-device passthrough, so it cannot rip a
+physical disc — verify ripper logic via `test/unittest/` and crafted `Job`/`Track` records
+viewed in the UI.
+
+**Source is baked into the image, not bind-mounted.** The `Dockerfile` `COPY`s the repo to
+`/opt/arm` at build time, so this works even when the Docker daemon is **remote** (an SSH
+`docker context`) and cannot see your working tree. The trade-off: there is **no live edit** —
+after changing code on the host, rebuild to pick it up (fast; the dependency base image is cached):
+```
+docker compose -f docker-compose.dev.yml build
+docker compose -f docker-compose.dev.yml up -d          # recreate from the new image
+```
+
+Bring it up (first build pulls the multi-GB dependencies base image):
+```
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+**Where the UI serves:** published ports bind on the **daemon host**, not necessarily
+`localhost`. Host port is **8090** → container 8080. With a local engine the UI is at
+`http://localhost:8090`; with a remote daemon it is at `http://<daemon-host>:8090`.
+
+Install dev-only tooling (pytest/flake8) once per container lifecycle, then run tests / a
+single test / lint inside the container. Use `python3` (there is no `python` on PATH), and
+run from `/opt/arm`:
+```
+docker compose -f docker-compose.dev.yml exec arm-dev pip install -r /opt/arm/requirements-dev.txt
+docker compose -f docker-compose.dev.yml exec -w /opt/arm arm-dev python3 -m pytest test/unittest/
+docker compose -f docker-compose.dev.yml exec -w /opt/arm arm-dev python3 -m pytest test/unittest/test_ripper_utils_file_matching.py::TestFileMatching::test_find_matching_file_exact_match
+docker compose -f docker-compose.dev.yml exec -w /opt/arm arm-dev flake8 . --max-complexity=15 --max-line-length=120 --show-source --statistics
+```
+
+Open a Python shell (Flask app context available) to craft `Job`/`Track` records:
+```
+docker compose -f docker-compose.dev.yml exec -w /opt/arm arm-dev /bin/python3
+```
+
+Reset all DB/config state to a clean slate:
+```
+docker compose -f docker-compose.dev.yml down -v
+```
+
+Notes:
+- **Windows + Git Bash:** prefix any command that passes a container-absolute path (e.g.
+  `/opt/arm/...`) with `MSYS_NO_PATHCONV=1`, or MSYS rewrites it to a Windows path.
+- udev logs harmless "no optical device" messages — expected.
+- State lives in the `arm-home` and `arm-config` named volumes; `down` keeps it, `down -v` wipes it.
+- Known pre-existing test failures (unrelated to this dev env): 6 tests in
+  `test_ripper_ARMInfo.py` (bytes-vs-str regex) and `test_ripper_processhandler.py`
+  (stale `check_output` mock assertion) fail on the current tree; 23 pass.
