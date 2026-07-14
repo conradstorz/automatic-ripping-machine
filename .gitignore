@@ -157,6 +157,9 @@ cython_debug/
 arm.conf.yaml
 logs/*
 *.log
+
+# Legacy predecessor project (untracked); keep it out of the repo and image
+Autorippr/
 test.sh
 archive/
 temp/
