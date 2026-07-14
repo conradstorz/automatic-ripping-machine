@@ -14,6 +14,7 @@ from arm.ripper.logger import short_format
 from flask_login import LoginManager
 import bcrypt  # noqa: F401
 import arm.config.config as cfg
+from arm.ui.security import load_or_create_secret_key, generate_debug_pin
 
 sqlitefile = 'sqlite:///' + cfg.arm_config['DBFILE']
 
@@ -50,14 +51,15 @@ login_manager.init_app(app)
 # Set Flask database connection configurations
 app.config['SQLALCHEMY_DATABASE_URI'] = sqlitefile
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# We should really generate a key for each system
-app.config['SECRET_KEY'] = "Big secret key"  # TODO: make this random!
+# Persisted secret key (see arm/ui/security.py); survives UI restarts.
+app.config['SECRET_KEY'] = load_or_create_secret_key(os.path.dirname(cfg.arm_config_path))
 # Set the global Flask Login state, set to True will ignore any @login_required
 app.config['LOGIN_DISABLED'] = cfg.arm_config['DISABLE_LOGIN']
 app.logger.debug(f"Disable Login: {cfg.arm_config['DISABLE_LOGIN']}")
 # Set debug pin as it is hidden normally
-os.environ["WERKZEUG_DEBUG_PIN"] = "12345"  # make this random!
-app.logger.debug("Debugging pin: " + os.environ["WERKZEUG_DEBUG_PIN"])
+# Randomize the Werkzeug debugger PIN each start; never log its value.
+os.environ["WERKZEUG_DEBUG_PIN"] = generate_debug_pin()
+app.logger.debug("Werkzeug debug PIN randomized")
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
