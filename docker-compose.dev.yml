@@ -3,6 +3,11 @@
 #
 # This is additive and never used in production. It builds the same Dockerfile
 # but runs without optical-device passthrough, so physical ripping cannot occur.
+#
+# Source is baked into the image at build time (Dockerfile `COPY . /opt/arm/`);
+# there is NO source bind mount, so this works even when the Docker daemon is
+# remote (e.g. an SSH context) and cannot see the client's working tree.
+# Pick up code changes by rebuilding: `docker compose -f docker-compose.dev.yml build`.
 services:
   arm-dev:
     build:
@@ -13,16 +18,16 @@ services:
     # Required for udev/mount behaviour the container expects. Safe locally.
     privileged: true
     ports:
-      - "8080:8080"
+      # Host 8090 -> container 8080 (host 8080 commonly collides with other services).
+      - "8090:8080"
     environment:
       ARM_UID: "1000"
       ARM_GID: "1000"
       TZ: "Etc/UTC"
       PYTHONUNBUFFERED: "1"
     volumes:
-      # Live source: host edits are visible immediately inside the container.
-      - .:/opt/arm
       # Persistent state (SQLite DB, media, logs, staged config).
+      # No source bind mount: source is baked into the image (see header note).
       - arm-home:/home/arm
       - arm-config:/etc/arm/config
     # Fix ownership of freshly-created named volumes (root-owned by default) so
