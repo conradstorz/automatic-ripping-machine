@@ -85,5 +85,14 @@ jobs:
         sudo mkdir -p /opt/arm/arm /opt/arm/setup
         sudo cp -r arm/migrations /opt/arm/arm
         cp setup/arm.yaml /opt/arm/setup/arm.yaml
+    - name: Stage full ARM source at /opt/arm
+      # The unit tests import via a hardcoded sys.path entry of /opt/arm (the
+      # container install path), so mirror that layout for imports to resolve.
+      run: |
+        sudo cp -r "$GITHUB_WORKSPACE/." /opt/arm/
+        sudo chown -R "$(id -u):$(id -g)" /opt/arm
+    - name: Run unit tests
+      run: pytest test/unittest/ -v
+      working-directory: /opt/arm
     - name: Run A.R.M ui
       run: timeout 1 python ./arm/runui.py || code=$?; if [[ $code -ne 124 && $code -ne 0 ]]; then exit $code; fi
