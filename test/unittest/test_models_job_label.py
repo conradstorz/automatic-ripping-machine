@@ -1,9 +1,10 @@
-"""Label-sanitization regression tests for the Job model source sites.
+"""Label-storage tests for the Job model source sites.
 
-sanitize_label can reduce a non-empty raw label (e.g. "///" or "...") to an
-empty string. The udev ID_FS_LABEL and lsdvd source sites must not let that
-empty result clobber the label into an empty path component; a good label must
-still be applied (and sanitized).
+job.label is untrusted disc metadata but is kept RAW at the source: it feeds
+metadata lookup (OMDb/TMDB/MusicBrainz), the dupe-check DB query, and UI
+display, all of which want the original string. Sanitization happens only at
+the filesystem-path sinks (rip_data, logger), never here. These tests pin that
+the udev ID_FS_LABEL and lsdvd sources store the label verbatim.
 """
 import sys
 import unittest
@@ -35,15 +36,15 @@ class TestParseUdevLabel(unittest.TestCase):
             job.parse_udev()
         return job
 
-    def test_good_label_is_applied(self):
+    def test_label_is_stored_raw(self):
         job = self._run_parse_udev([("ID_FS_LABEL", "My Movie")])
         self.assertEqual(job.label, "My Movie")
 
-    def test_garbage_label_does_not_become_empty_string(self):
-        # "///" sanitizes to "" — it must NOT overwrite the label with an empty
-        # path component; the prior value (None) is preserved instead.
-        job = self._run_parse_udev([("ID_FS_LABEL", "///")])
-        self.assertNotEqual(job.label, "")
+    def test_label_with_path_chars_kept_raw(self):
+        # Path-unsafe characters are NOT stripped at the source; that happens
+        # only at the path sinks. Metadata/dupe-check want the original string.
+        job = self._run_parse_udev([("ID_FS_LABEL", "Movie: 2/2")])
+        self.assertEqual(job.label, "Movie: 2/2")
 
     def test_iso9660_still_sets_data_disctype(self):
         job = self._run_parse_udev([("ID_FS_LABEL", "iso9660")])
@@ -62,13 +63,13 @@ class TestLsdvdLabel(unittest.TestCase):
             Job._apply_lsdvd_label(job)
         return job
 
-    def test_good_lsdvd_label_is_applied(self):
+    def test_lsdvd_label_is_stored_raw(self):
         job = self._run_lsdvd_branch(b"Cool Film")
         self.assertEqual(job.label, "Cool Film")
 
-    def test_garbage_lsdvd_label_does_not_become_empty_string(self):
-        job = self._run_lsdvd_branch(b"...")
-        self.assertNotEqual(job.label, "")
+    def test_lsdvd_label_with_path_chars_kept_raw(self):
+        job = self._run_lsdvd_branch(b"Disc 1/2")
+        self.assertEqual(job.label, "Disc 1/2")
 
 
 if __name__ == '__main__':

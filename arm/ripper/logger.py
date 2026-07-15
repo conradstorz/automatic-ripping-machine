@@ -11,6 +11,7 @@ import logging.handlers
 import time
 
 import arm.config.config as cfg
+from arm.ripper.sanitize import sanitize_label
 
 
 short_format = (
@@ -24,19 +25,26 @@ short_formatter = logging.Formatter(short_format, datefmt=cfg.arm_config["DATE_F
 long_formatter = logging.Formatter(long_format, datefmt=cfg.arm_config["DATE_FORMAT"])
 
 
+def _safe_log_label(job):
+    """Return a filesystem-safe label for building this job's log filename.
+
+    job.label is untrusted disc metadata kept raw everywhere else; this is a
+    path sink, so sanitize it here. Falls back to "no_label" when there is no
+    usable label (empty, or sanitized away to nothing).
+    """
+    if job.label == "" or job.label is None:
+        if job.disctype == "music":
+            return job.identify_audio_cd()
+        return "no_label"
+    return sanitize_label(job.label) or "no_label"
+
+
 def setup_job_log(job):
     """
     Setup logging and return the path to the logfile for redirection of external calls\n
     We need to return the full logfile path but set the job.logfile to just the filename
     """
-    # This isn't catching all of them
-    if job.label == "" or job.label is None:
-        if job.disctype == "music":
-            valid_label = job.identify_audio_cd()
-        else:
-            valid_label = "no_label"
-    else:
-        valid_label = job.label.replace("/", "_")
+    valid_label = _safe_log_label(job)
 
     log_file_name = f"{valid_label}.log"
     new_log_file = f"{valid_label}_{job.stage}.log"

@@ -11,7 +11,6 @@ from prettytable import PrettyTable
 from sqlalchemy.ext.hybrid import hybrid_property
 
 from arm.ripper import music_brainz
-from arm.ripper.sanitize import sanitize_label
 from arm.ui import db
 import arm.config.config as cfg
 
@@ -176,18 +175,15 @@ class Job(db.Model):
             self._apply_lsdvd_label()
 
     def _apply_lsdvd_label(self):
-        """Fill an empty DVD label from lsdvd's Disc Title, sanitized.
+        """Fill an empty DVD label from lsdvd's Disc Title.
 
-        Only assigns when sanitization leaves a non-empty result, so a label
-        made up entirely of stripped characters cannot blank the label into an
-        empty path component.
+        Stores the raw title; the label is untrusted disc metadata but is
+        sanitized only where it becomes a filesystem path (rip_data, logger),
+        not here, so metadata lookup and the dupe-check query see the original.
         """
         logging.info("No disk label Available. Trying lsdvd")
         command = f"lsdvd {self.devpath} | grep 'Disc Title' | cut -d ' ' -f 3-"
-        lsdvdlbl = str(subprocess.check_output(command, shell=True).strip(), 'utf-8')
-        label = sanitize_label(lsdvdlbl)
-        if label:
-            self.label = label
+        self.label = str(subprocess.check_output(command, shell=True).strip(), 'utf-8')
 
     def __str__(self):
         """Returns a string of the object"""
@@ -210,11 +206,9 @@ class Job(db.Model):
         for key, value in device.items():
             logging.debug(f"pyudev: {key}: {value}")
             if key == "ID_FS_LABEL":
-                # Only apply a non-empty sanitized label so a garbage label
-                # cannot blank self.label into an empty path component.
-                label = sanitize_label(value)
-                if label:
-                    self.label = label
+                # Store the raw label; it is sanitized only where it becomes a
+                # filesystem path (rip_data, logger), not here.
+                self.label = value
                 if value == "iso9660":
                     self.disctype = "data"
             elif key == "ID_CDROM_MEDIA_BD":
