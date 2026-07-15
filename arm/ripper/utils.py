@@ -4,6 +4,7 @@ import datetime
 import os
 import logging
 import subprocess
+import shlex
 import shutil
 import time
 import random
@@ -28,6 +29,7 @@ from arm.models.track import Track
 from arm.models.user import User
 from arm.models.system_drives import SystemDrives
 from arm.ripper import apprise_bulk
+from arm.ripper.sanitize import sanitize_label
 
 NOTIFY_TITLE = "ARM notification"
 
@@ -477,6 +479,16 @@ def rip_music(job, logfile):
     return False
 
 
+def build_dd_command(devpath, out_path, params):
+    """Build a list-form (no-shell) ``dd`` argv for ripping a data disc.
+
+    Passing argv as a list means the destination path is a single argument;
+    shell metacharacters in it are never interpreted. ``params`` is the
+    admin-configured ``DATA_RIP_PARAMETERS`` string, split into separate args.
+    """
+    return ["dd", f"if={devpath}", f"of={out_path}", *shlex.split(params or "")]
+
+
 def rip_data(job):
     """
     Rip data disc using dd on the command line\n
@@ -485,6 +497,10 @@ def rip_data(job):
     """
     success = False
     if job.label == "" or job.label is None:
+        job.label = "data-disc"
+    # Sanitize the (attacker-controllable) disc label before it becomes a path.
+    job.label = sanitize_label(str(job.label))
+    if not job.label:
         job.label = "data-disc"
     # get filesystem in order
     raw_path = os.path.join(job.config.RAW_PATH, str(job.label))
@@ -502,11 +518,12 @@ def rip_data(job):
     make_dir(final_path)
     logging.info(f"Ripping data disc to: {incomplete_filename}")
     # Added from pull 366
-    cmd = f'dd if="{job.devpath}" of="{incomplete_filename}" {cfg.arm_config["DATA_RIP_PARAMETERS"]} 2>> ' \
-          f'{os.path.join(job.config.LOGPATH, job.logfile)}'
-    logging.debug(f"Sending command: {cmd}")
+    dd_cmd = build_dd_command(job.devpath, incomplete_filename, cfg.arm_config["DATA_RIP_PARAMETERS"])
+    log_path = os.path.join(job.config.LOGPATH, job.logfile)
+    logging.debug(f"Sending command: {dd_cmd}")
     try:
-        subprocess.check_output(cmd, shell=True).decode("utf-8")
+        with open(log_path, "a", encoding="utf-8") as log_fh:
+            subprocess.check_output(dd_cmd, stderr=log_fh).decode("utf-8")
         full_final_file = os.path.join(final_path, f"{str(job.label)}.iso")
         logging.info(f"Moving data-disc from '{incomplete_filename}' to '{full_final_file}'")
         move_files_main(incomplete_filename, full_final_file, final_path)
