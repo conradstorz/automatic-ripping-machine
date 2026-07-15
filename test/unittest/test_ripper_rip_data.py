@@ -74,5 +74,27 @@ class TestRipDataErrorHandling(unittest.TestCase):
         self.assert_marked_failure(utils.rip_data(make_job()))
 
 
+class TestBuildDdCommand(unittest.TestCase):
+
+    def test_returns_list_with_dd_and_operands(self):
+        cmd = utils.build_dd_command("/dev/sr0", "/home/arm/raw/x.part", "bs=1M conv=noerror")
+        self.assertIsInstance(cmd, list)
+        self.assertEqual(cmd[0], "dd")
+        self.assertEqual(cmd[1], "if=/dev/sr0")
+        self.assertEqual(cmd[2], "of=/home/arm/raw/x.part")
+        self.assertEqual(cmd[3:], ["bs=1M", "conv=noerror"])
+
+    def test_destination_is_single_element_no_shell_splitting(self):
+        # A destination containing shell metacharacters must remain ONE argv element.
+        dest = '/home/arm/raw/a b"; rm -rf ~.part'
+        cmd = utils.build_dd_command("/dev/sr0", dest, "")
+        self.assertIn(f"of={dest}", cmd)
+        self.assertEqual(len([c for c in cmd if c.startswith("of=")]), 1)
+
+    def test_empty_params(self):
+        cmd = utils.build_dd_command("/dev/sr0", "/x.part", "")
+        self.assertEqual(cmd, ["dd", "if=/dev/sr0", "of=/x.part"])
+
+
 if __name__ == '__main__':
     unittest.main()
