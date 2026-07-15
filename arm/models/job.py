@@ -198,14 +198,17 @@ class Job(db.Model):
         """
         logging.info("No disk label Available. Trying lsdvd")
         try:
-            output = subprocess.check_output(["lsdvd", self.devpath]).decode("utf-8", errors="replace")
-        except (subprocess.CalledProcessError, OSError) as error:
-            # OSError covers a missing (FileNotFoundError) or non-executable
-            # (PermissionError) lsdvd; tolerate it as the old shell pipeline did
+            # check=False: lsdvd can exit nonzero (e.g. a CSS warning) yet still
+            # print a usable Disc Title, which the old grep|cut pipeline kept.
+            # timeout guards against a hung lsdvd stalling disc-insert handling.
+            result = subprocess.run(["lsdvd", self.devpath], capture_output=True, timeout=60, check=False)
+        except (OSError, subprocess.SubprocessError) as error:
+            # OSError: missing (FileNotFoundError) or non-executable
+            # (PermissionError) lsdvd. SubprocessError: a timeout. Tolerate both
             # rather than crashing Job.__init__ on disc insert.
             logging.debug(f"lsdvd label lookup failed: {error}")
             return
-        self.label = _parse_lsdvd_title(output)
+        self.label = _parse_lsdvd_title(result.stdout.decode("utf-8", errors="replace"))
 
     def __str__(self):
         """Returns a string of the object"""

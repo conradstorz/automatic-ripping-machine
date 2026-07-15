@@ -37,7 +37,7 @@ class TestRipDataErrorHandling(unittest.TestCase):
             ("database_updater", None),
         ):
             setattr(self, name, mock.patch.object(utils, name, return_value=ret).start())
-        mock.patch.object(utils.shutil, "rmtree").start()
+        self.rmtree = mock.patch.object(utils.shutil, "rmtree").start()
         # A mutable config dict tests can override per-case.
         mock.patch.object(utils.cfg, "arm_config", {"DATA_RIP_PARAMETERS": "bs=1M"}).start()
         self.addCleanup(mock.patch.stopall)
@@ -73,15 +73,28 @@ class TestRipDataErrorHandling(unittest.TestCase):
         # raises, but the job must still be marked FAILURE.
         self.assert_marked_failure(utils.rip_data(make_job()))
 
+    @mock.patch.object(utils.os.path, "isfile", return_value=True)
     @mock.patch("builtins.open", new_callable=mock.mock_open)
     @mock.patch.object(utils.subprocess, "check_output", return_value=b"")
-    def test_label_not_mutated_by_sanitizing(self, mock_check, mock_open_):
+    def test_label_not_mutated_by_sanitizing(self, mock_check, mock_open_, mock_isfile):
         # rip_data must sanitize only for path building, not overwrite
         # job.label, so the dupe-check query and display keep the raw value.
         job = make_job()
         job.label = "BACKUP."          # sanitizes to "BACKUP"
         utils.rip_data(job)
         self.assertEqual(job.label, "BACKUP.")
+
+    @mock.patch.object(utils.os.path, "isfile", return_value=False)
+    @mock.patch("builtins.open", new_callable=mock.mock_open)
+    @mock.patch.object(utils.subprocess, "check_output", return_value=b"")
+    def test_silent_move_failure_marks_failure_and_keeps_source(self, mock_check, mock_open_, mock_isfile):
+        # dd succeeds but the move silently fails (move_files_main swallows its
+        # own errors). rip_data must NOT report success or delete the source.
+        result = utils.rip_data(make_job())
+        self.assertFalse(result)
+        self.database_updater.assert_called_once()
+        self.assertEqual(self.database_updater.call_args[0][0]["status"], JobState.FAILURE.value)
+        self.rmtree.assert_not_called()
 
 
 class TestBuildDdCommand(unittest.TestCase):
@@ -152,6 +165,16 @@ class TestSaveDiscPoster(unittest.TestCase):
         ffmpeg_calls = [c for c in mock_run.call_args_list if c.args[0][0] == "ffmpeg"]
         self.assertTrue(ffmpeg_calls)
         self.assertIn('/out/evil"; rm -rf ~/poster.png', ffmpeg_calls[0].args[0])
+
+    @mock.patch.object(utils.os, "system")
+    @mock.patch.object(utils.os.path, "isfile", return_value=False)
+    @mock.patch.object(utils.subprocess, "run", side_effect=FileNotFoundError("mount"))
+    def test_poster_missing_executable_is_tolerated(self, mock_run, mock_isfile, mock_system):
+        # A missing mount/ffmpeg/umount must not abort the whole rip; the poster
+        # step is best-effort, as the old os.system version was.
+        job = SimpleNamespace(disctype="dvd", devpath="/dev/sr0", mountpoint="/mnt/disc")
+        with mock.patch.object(utils.cfg, "arm_config", {"RIP_POSTER": True}):
+            utils.save_disc_poster("/out", job)   # must not raise
 
 
 if __name__ == '__main__':

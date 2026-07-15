@@ -7,7 +7,9 @@ the filesystem-path sinks (rip_data, logger), never here. These tests pin that
 the udev ID_FS_LABEL and lsdvd sources store the label verbatim.
 """
 import sys
+import subprocess
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, '/opt/arm')
@@ -65,13 +67,14 @@ class TestParseLsdvdTitle(unittest.TestCase):
 
 class TestLsdvdLabel(unittest.TestCase):
 
-    def _run_lsdvd_branch(self, lsdvd_output):
+    def _run_lsdvd_branch(self, stdout_bytes, returncode=0):
         job = make_bare_job()
         job.disctype = "dvd"
-        with mock.patch("arm.models.job.subprocess.check_output",
-                        return_value=lsdvd_output) as mock_check:
+        completed = SimpleNamespace(stdout=stdout_bytes, returncode=returncode)
+        with mock.patch("arm.models.job.subprocess.run",
+                        return_value=completed) as mock_run:
             Job._apply_lsdvd_label(job)
-        return job, mock_check
+        return job, mock_run
 
     def test_lsdvd_label_is_stored_raw(self):
         job, _ = self._run_lsdvd_branch(b"Disc Title: Cool Film\n")
@@ -81,32 +84,48 @@ class TestLsdvdLabel(unittest.TestCase):
         job, _ = self._run_lsdvd_branch(b"Disc Title: Disc 1/2\n")
         self.assertEqual(job.label, "Disc 1/2")
 
-    def test_lsdvd_runs_list_form_without_shell(self):
-        # No shell: the device path must be passed as an argv element, never
-        # interpolated into a shell string.
-        _, mock_check = self._run_lsdvd_branch(b"Disc Title: X\n")
-        args, kwargs = mock_check.call_args
+    def test_lsdvd_runs_list_form_without_shell_with_timeout(self):
+        # No shell: the device path is an argv element; and a timeout guards
+        # against a hanging lsdvd blocking disc-insert processing.
+        _, mock_run = self._run_lsdvd_branch(b"Disc Title: X\n")
+        args, kwargs = mock_run.call_args
         self.assertIsInstance(args[0], list)
         self.assertEqual(args[0][0], "lsdvd")
         self.assertNotIn("shell", kwargs)
+        self.assertIn("timeout", kwargs)
+
+    def test_lsdvd_nonzero_exit_still_parses_title(self):
+        # lsdvd can print a usable Disc Title yet exit nonzero (e.g. a CSS
+        # warning); the old grep|cut pipeline masked the exit code, so we must
+        # still capture the title rather than dropping it. fake_run mimics real
+        # subprocess.run: check=True raises on the nonzero exit, so the code
+        # must run with check=False to keep the title.
+        def fake_run(cmd, **kwargs):
+            if kwargs.get("check"):
+                raise subprocess.CalledProcessError(1, cmd)
+            return SimpleNamespace(stdout=b"Disc Title: Cool Film\n", returncode=1)
+
+        job = make_bare_job()
+        job.disctype = "dvd"
+        with mock.patch("arm.models.job.subprocess.run", side_effect=fake_run):
+            Job._apply_lsdvd_label(job)
+        self.assertEqual(job.label, "Cool Film")
+
+    def _assert_tolerates(self, error):
+        job = make_bare_job()
+        job.disctype = "dvd"
+        with mock.patch("arm.models.job.subprocess.run", side_effect=error):
+            Job._apply_lsdvd_label(job)   # must not raise
+        self.assertIn(job.label, (None, ""))
 
     def test_lsdvd_missing_binary_is_tolerated(self):
-        job = make_bare_job()
-        job.disctype = "dvd"
-        with mock.patch("arm.models.job.subprocess.check_output",
-                        side_effect=FileNotFoundError("lsdvd")):
-            Job._apply_lsdvd_label(job)   # must not raise
-        self.assertIn(job.label, (None, ""))
+        self._assert_tolerates(FileNotFoundError("lsdvd"))
 
     def test_lsdvd_permission_error_is_tolerated(self):
-        # A non-executable lsdvd raises PermissionError (an OSError that is not
-        # FileNotFoundError); it must not crash Job.__init__.
-        job = make_bare_job()
-        job.disctype = "dvd"
-        with mock.patch("arm.models.job.subprocess.check_output",
-                        side_effect=PermissionError("lsdvd")):
-            Job._apply_lsdvd_label(job)   # must not raise
-        self.assertIn(job.label, (None, ""))
+        self._assert_tolerates(PermissionError("lsdvd"))
+
+    def test_lsdvd_timeout_is_tolerated(self):
+        self._assert_tolerates(subprocess.TimeoutExpired(["lsdvd"], 60))
 
 
 if __name__ == '__main__':

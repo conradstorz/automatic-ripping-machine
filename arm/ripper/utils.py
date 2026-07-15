@@ -536,8 +536,16 @@ def rip_data(job):
         full_final_file = os.path.join(final_path, f"{safe_label}.iso")
         logging.info(f"Moving data-disc from '{incomplete_filename}' to '{full_final_file}'")
         move_files_main(incomplete_filename, full_final_file, final_path)
-        logging.info("Data rip call successful")
-        success = True
+        # move_files_main swallows its own errors, so confirm the ISO actually
+        # arrived before reporting success -- otherwise the raw_path cleanup
+        # below would delete the .part that was never moved (silent data loss).
+        if os.path.isfile(full_final_file):
+            logging.info("Data rip call successful")
+            success = True
+        else:
+            err = f"Data rip move failed: '{full_final_file}' not created; keeping source '{incomplete_filename}'"
+            logging.error(err)
+            database_updater({"status": JobState.FAILURE.value, "errors": err}, job)
     except (subprocess.CalledProcessError, OSError, ValueError) as dd_error:
         returncode = getattr(dd_error, "returncode", "n/a")
         detail = getattr(dd_error, "output", None) or dd_error
@@ -551,11 +559,14 @@ def rip_data(job):
             logging.error(f"Could not remove incomplete file '{incomplete_filename}': {unlink_error}")
         args = {"status": JobState.FAILURE.value, "errors": err}
         database_updater(args, job)
-    try:
-        logging.info(f"Trying to remove raw_path: '{raw_path}'")
-        shutil.rmtree(raw_path)
-    except OSError as error:
-        logging.error(f"Error: {error.filename} - {error.strerror}.")
+    # Only clear the working directory once the ISO was moved out successfully;
+    # on failure the .part still lives here and must be kept for retry/recovery.
+    if success:
+        try:
+            logging.info(f"Trying to remove raw_path: '{raw_path}'")
+            shutil.rmtree(raw_path)
+        except OSError as error:
+            logging.error(f"Error: {error.filename} - {error.strerror}.")
     return success
 
 
@@ -834,17 +845,25 @@ def save_disc_poster(final_directory, job):
     if job.disctype == "dvd" and cfg.arm_config["RIP_POSTER"]:
         # List-form (no shell) so the device path, mountpoint, and the
         # title-derived final_directory are never interpreted by a shell.
-        subprocess.run(["mount", job.devpath], check=False)
+        def _poster_cmd(cmd):
+            # Best-effort: a missing mount/ffmpeg/umount must not abort the rip
+            # (os.system merely returned nonzero; subprocess.run raises).
+            try:
+                subprocess.run(cmd, check=False)
+            except OSError as error:
+                logging.error(f"Poster step '{cmd[0]}' skipped: {error}")
+
+        _poster_cmd(["mount", job.devpath])
         ntsc_poster = os.path.join(job.mountpoint, "JACKET_P", "J00___5L.MP2")
         pal_poster = os.path.join(job.mountpoint, "JACKET_P", "J00___6L.MP2")
         poster_out = os.path.join(final_directory, "poster.png")
         if os.path.isfile(ntsc_poster):
             logging.info("Converting NTSC Poster Image")
-            subprocess.run(["ffmpeg", "-i", ntsc_poster, poster_out], check=False)
+            _poster_cmd(["ffmpeg", "-i", ntsc_poster, poster_out])
         elif os.path.isfile(pal_poster):
             logging.info("Converting PAL Poster Image")
-            subprocess.run(["ffmpeg", "-i", pal_poster, poster_out], check=False)
-        subprocess.run(["umount", job.devpath], check=False)
+            _poster_cmd(["ffmpeg", "-i", pal_poster, poster_out])
+        _poster_cmd(["umount", job.devpath])
 
 
 def check_for_dupe_folder(have_dupes, hb_out_path, job):
