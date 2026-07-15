@@ -772,7 +772,11 @@ def check_ip():
 
 
 def clean_for_filename(string):
-    """ Cleans up string for use in filename """
+    """Cleans up a (trusted) string for use in a filename.
+
+    Aesthetic cleanup only, NOT a security boundary: for untrusted disc labels
+    use ``arm.ripper.sanitize.sanitize_label`` instead.
+    """
     string = re.sub('\\[(.*?)]', '', string)
     string = re.sub('\\s+', '-', string)
     string = string.replace(' : ', ' - ')
