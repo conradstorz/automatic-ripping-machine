@@ -98,6 +98,16 @@ class TestLsdvdLabel(unittest.TestCase):
             Job._apply_lsdvd_label(job)   # must not raise
         self.assertIn(job.label, (None, ""))
 
+    def test_lsdvd_permission_error_is_tolerated(self):
+        # A non-executable lsdvd raises PermissionError (an OSError that is not
+        # FileNotFoundError); it must not crash Job.__init__.
+        job = make_bare_job()
+        job.disctype = "dvd"
+        with mock.patch("arm.models.job.subprocess.check_output",
+                        side_effect=PermissionError("lsdvd")):
+            Job._apply_lsdvd_label(job)   # must not raise
+        self.assertIn(job.label, (None, ""))
+
 
 if __name__ == '__main__':
     unittest.main()

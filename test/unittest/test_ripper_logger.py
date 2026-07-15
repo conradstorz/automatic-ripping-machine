@@ -48,6 +48,12 @@ class TestSafeLogLabel(unittest.TestCase):
         job = make_job(None, disctype="music", audio_cd_label="Portishead - Dummy")
         self.assertEqual(_safe_log_label(job), "Portishead - Dummy")
 
+    def test_empty_label_music_is_sanitized(self):
+        # An untrusted MusicBrainz title with a separator (e.g. "AC/DC") must
+        # not produce a path-breaking log filename.
+        job = make_job(None, disctype="music", audio_cd_label="AC/DC")
+        self.assertNotIn("/", _safe_log_label(job))
+
 
 if __name__ == '__main__':
     unittest.main()

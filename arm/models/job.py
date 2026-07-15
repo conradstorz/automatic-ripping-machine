@@ -199,7 +199,10 @@ class Job(db.Model):
         logging.info("No disk label Available. Trying lsdvd")
         try:
             output = subprocess.check_output(["lsdvd", self.devpath]).decode("utf-8", errors="replace")
-        except (subprocess.CalledProcessError, FileNotFoundError) as error:
+        except (subprocess.CalledProcessError, OSError) as error:
+            # OSError covers a missing (FileNotFoundError) or non-executable
+            # (PermissionError) lsdvd; tolerate it as the old shell pipeline did
+            # rather than crashing Job.__init__ on disc insert.
             logging.debug(f"lsdvd label lookup failed: {error}")
             return
         self.label = _parse_lsdvd_title(output)

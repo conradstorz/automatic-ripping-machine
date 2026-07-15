@@ -34,7 +34,7 @@ def _safe_log_label(job):
     """
     if job.label == "" or job.label is None:
         if job.disctype == "music":
-            return job.identify_audio_cd()
+            return sanitize_label(job.identify_audio_cd()) or "no_label"
         return "no_label"
     return sanitize_label(job.label) or "no_label"
 

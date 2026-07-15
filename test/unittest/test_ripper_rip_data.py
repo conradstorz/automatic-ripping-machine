@@ -73,6 +73,16 @@ class TestRipDataErrorHandling(unittest.TestCase):
         # raises, but the job must still be marked FAILURE.
         self.assert_marked_failure(utils.rip_data(make_job()))
 
+    @mock.patch("builtins.open", new_callable=mock.mock_open)
+    @mock.patch.object(utils.subprocess, "check_output", return_value=b"")
+    def test_label_not_mutated_by_sanitizing(self, mock_check, mock_open_):
+        # rip_data must sanitize only for path building, not overwrite
+        # job.label, so the dupe-check query and display keep the raw value.
+        job = make_job()
+        job.label = "BACKUP."          # sanitizes to "BACKUP"
+        utils.rip_data(job)
+        self.assertEqual(job.label, "BACKUP.")
+
 
 class TestBuildDdCommand(unittest.TestCase):
 

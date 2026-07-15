@@ -498,23 +498,23 @@ def rip_data(job):
     success = False
     if job.label == "" or job.label is None:
         job.label = "data-disc"
-    # Sanitize the (attacker-controllable) disc label before it becomes a path.
-    job.label = sanitize_label(str(job.label))
-    if not job.label:
-        job.label = "data-disc"
+    # Sanitize the (attacker-controllable) disc label into a local name used
+    # only for path building. job.label itself stays raw so the dupe-check
+    # query and label display keep the original value.
+    safe_label = sanitize_label(str(job.label)) or "data-disc"
     # get filesystem in order
-    raw_path = os.path.join(job.config.RAW_PATH, str(job.label))
+    raw_path = os.path.join(job.config.RAW_PATH, safe_label)
     final_path = os.path.join(job.config.COMPLETED_PATH, convert_job_type(job.video_type))
-    final_file_name = str(job.label)
+    final_file_name = safe_label
 
     if (make_dir(raw_path)) is False:
         random_time = str(round(time.time() * 100))
-        raw_path = os.path.join(job.config.RAW_PATH, str(job.label) + "_" + random_time)
-        final_file_name = f"{job.label}_{random_time}"
+        raw_path = os.path.join(job.config.RAW_PATH, safe_label + "_" + random_time)
+        final_file_name = f"{safe_label}_{random_time}"
         make_dir(raw_path, False)
 
     final_path = os.path.join(final_path, final_file_name)
-    incomplete_filename = os.path.join(raw_path, str(job.label) + ".part")
+    incomplete_filename = os.path.join(raw_path, safe_label + ".part")
     make_dir(final_path)
     logging.info(f"Ripping data disc to: {incomplete_filename}")
     # Added from pull 366
@@ -529,7 +529,7 @@ def rip_data(job):
         logging.debug(f"Sending command: {dd_cmd}")
         with open(log_path, "a", encoding="utf-8") as log_fh:
             subprocess.check_output(dd_cmd, stderr=log_fh).decode("utf-8")
-        full_final_file = os.path.join(final_path, f"{str(job.label)}.iso")
+        full_final_file = os.path.join(final_path, f"{safe_label}.iso")
         logging.info(f"Moving data-disc from '{incomplete_filename}' to '{full_final_file}'")
         move_files_main(incomplete_filename, full_final_file, final_path)
         logging.info("Data rip call successful")
