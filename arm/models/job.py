@@ -40,6 +40,18 @@ def _listdir_safe(path):
         return []
 
 
+def _parse_lsdvd_title(output):
+    """Return the Disc Title from lsdvd's text output, or "" if absent.
+
+    Replaces the old ``grep 'Disc Title' | cut -d ' ' -f 3-`` shell pipeline so
+    lsdvd can be run without a shell.
+    """
+    for line in output.splitlines():
+        if line.strip().startswith("Disc Title:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
 class JobState(str, enum.Enum):
     """Possible states for Job.status.
 
@@ -177,13 +189,20 @@ class Job(db.Model):
     def _apply_lsdvd_label(self):
         """Fill an empty DVD label from lsdvd's Disc Title.
 
-        Stores the raw title; the label is untrusted disc metadata but is
-        sanitized only where it becomes a filesystem path (rip_data, logger),
-        not here, so metadata lookup and the dupe-check query see the original.
+        Runs lsdvd in list form (no shell) so the device path is never
+        interpreted by a shell, and parses the Disc Title in Python instead of
+        piping through grep/cut. Stores the raw title; the label is untrusted
+        disc metadata but is sanitized only where it becomes a filesystem path
+        (rip_data, logger), not here, so metadata lookup and the dupe-check
+        query see the original.
         """
         logging.info("No disk label Available. Trying lsdvd")
-        command = f"lsdvd {self.devpath} | grep 'Disc Title' | cut -d ' ' -f 3-"
-        self.label = str(subprocess.check_output(command, shell=True).strip(), 'utf-8')
+        try:
+            output = subprocess.check_output(["lsdvd", self.devpath]).decode("utf-8", errors="replace")
+        except (subprocess.CalledProcessError, FileNotFoundError) as error:
+            logging.debug(f"lsdvd label lookup failed: {error}")
+            return
+        self.label = _parse_lsdvd_title(output)
 
     def __str__(self):
         """Returns a string of the object"""
