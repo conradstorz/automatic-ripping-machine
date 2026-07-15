@@ -1,0 +1,78 @@
+"""Error-handling regression tests for utils.rip_data.
+
+The switch to list-form ``dd`` (no shell) narrowed the set of exceptions that
+reach ``rip_data``'s handler, which only caught ``CalledProcessError``. These
+tests pin the intended contract: any expected rip failure must mark the job
+FAILURE and return False, never propagate and crash the ripper mid-job.
+"""
+import sys
+import subprocess
+import unittest
+from types import SimpleNamespace
+from unittest import mock
+
+sys.path.insert(0, '/opt/arm')
+from arm.ripper import utils   # noqa: E402
+from arm.models.job import JobState   # noqa: E402
+
+
+def make_job():
+    return SimpleNamespace(
+        label="mydisc",
+        devpath="/dev/sr0",
+        video_type="unknown",
+        logfile="job.log",
+        config=SimpleNamespace(RAW_PATH="/raw", COMPLETED_PATH="/done", LOGPATH="/logs"),
+    )
+
+
+class TestRipDataErrorHandling(unittest.TestCase):
+
+    def setUp(self):
+        # Stub collaborators so rip_data touches no real filesystem or DB.
+        for name, ret in (
+            ("make_dir", True),
+            ("convert_job_type", "unknown"),
+            ("move_files_main", None),
+            ("database_updater", None),
+        ):
+            setattr(self, name, mock.patch.object(utils, name, return_value=ret).start())
+        mock.patch.object(utils.shutil, "rmtree").start()
+        # A mutable config dict tests can override per-case.
+        mock.patch.object(utils.cfg, "arm_config", {"DATA_RIP_PARAMETERS": "bs=1M"}).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def assert_marked_failure(self, result):
+        self.assertFalse(result)
+        self.database_updater.assert_called_once()
+        self.assertEqual(self.database_updater.call_args[0][0]["status"], JobState.FAILURE.value)
+
+    @mock.patch("builtins.open", new_callable=mock.mock_open)
+    @mock.patch.object(utils.subprocess, "check_output", side_effect=FileNotFoundError("dd"))
+    def test_missing_dd_binary_marks_failure_not_crash(self, mock_check, mock_open_):
+        # dd not on PATH -> FileNotFoundError (not CalledProcessError).
+        self.assert_marked_failure(utils.rip_data(make_job()))
+
+    def test_malformed_rip_parameters_marks_failure_not_crash(self):
+        # Unbalanced quote in admin config -> shlex.split raises ValueError.
+        utils.cfg.arm_config["DATA_RIP_PARAMETERS"] = 'bs=1M count="5'
+        self.assert_marked_failure(utils.rip_data(make_job()))
+
+    @mock.patch("builtins.open", side_effect=OSError("logpath unwritable"))
+    def test_logfile_open_failure_marks_failure_not_crash(self, mock_open_):
+        # Opening the job logfile fails -> OSError, not CalledProcessError.
+        self.assert_marked_failure(utils.rip_data(make_job()))
+
+    @mock.patch.object(utils.os.path, "exists", return_value=True)
+    @mock.patch.object(utils.os, "unlink", side_effect=FileNotFoundError("gone"))
+    @mock.patch("builtins.open", new_callable=mock.mock_open)
+    @mock.patch.object(utils.subprocess, "check_output",
+                       side_effect=subprocess.CalledProcessError(1, "dd"))
+    def test_cleanup_unlink_failure_still_marks_failure(self, mock_check, mock_open_, mock_unlink, mock_exists):
+        # dd failed before creating the .part file; the cleanup unlink itself
+        # raises, but the job must still be marked FAILURE.
+        self.assert_marked_failure(utils.rip_data(make_job()))
+
+
+if __name__ == '__main__':
+    unittest.main()

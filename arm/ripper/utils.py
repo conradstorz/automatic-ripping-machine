@@ -518,10 +518,15 @@ def rip_data(job):
     make_dir(final_path)
     logging.info(f"Ripping data disc to: {incomplete_filename}")
     # Added from pull 366
-    dd_cmd = build_dd_command(job.devpath, incomplete_filename, cfg.arm_config["DATA_RIP_PARAMETERS"])
     log_path = os.path.join(job.config.LOGPATH, job.logfile)
-    logging.debug(f"Sending command: {dd_cmd}")
+    # Build the command and run dd inside the try: dropping shell=True means a
+    # missing dd binary (FileNotFoundError), an unwritable logfile (OSError), or
+    # a malformed DATA_RIP_PARAMETERS (shlex ValueError) surface as their own
+    # exception types, none of which are CalledProcessError. Catch them all so a
+    # rip failure marks the job FAILURE instead of crashing the ripper mid-job.
     try:
+        dd_cmd = build_dd_command(job.devpath, incomplete_filename, cfg.arm_config["DATA_RIP_PARAMETERS"])
+        logging.debug(f"Sending command: {dd_cmd}")
         with open(log_path, "a", encoding="utf-8") as log_fh:
             subprocess.check_output(dd_cmd, stderr=log_fh).decode("utf-8")
         full_final_file = os.path.join(final_path, f"{str(job.label)}.iso")
@@ -529,10 +534,17 @@ def rip_data(job):
         move_files_main(incomplete_filename, full_final_file, final_path)
         logging.info("Data rip call successful")
         success = True
-    except subprocess.CalledProcessError as dd_error:
-        err = f"Data rip failed with code: {dd_error.returncode}({dd_error.output})"
+    except (subprocess.CalledProcessError, OSError, ValueError) as dd_error:
+        returncode = getattr(dd_error, "returncode", "n/a")
+        detail = getattr(dd_error, "output", None) or dd_error
+        err = f"Data rip failed with code: {returncode}({detail})"
         logging.error(err)
-        os.unlink(incomplete_filename)
+        # The .part file may never have been created (e.g. dd could not open the
+        # device); guard the cleanup so it cannot mask the failure status.
+        try:
+            os.unlink(incomplete_filename)
+        except OSError as unlink_error:
+            logging.error(f"Could not remove incomplete file '{incomplete_filename}': {unlink_error}")
         args = {"status": JobState.FAILURE.value, "errors": err}
         database_updater(args, job)
     try:
