@@ -106,5 +106,53 @@ class TestBuildDdCommand(unittest.TestCase):
         self.assertEqual(cmd, ["dd", "if=/dev/sr0", "of=/x.part"])
 
 
+class TestFixJobTitle(unittest.TestCase):
+
+    def _job(self, title=None, title_manual=None, year=None):
+        return SimpleNamespace(title=title, title_manual=title_manual, year=year)
+
+    def test_title_with_year(self):
+        self.assertEqual(utils.fix_job_title(self._job(title="The Matrix", year="1999")),
+                         "The Matrix (1999)")
+
+    def test_title_without_year(self):
+        self.assertEqual(utils.fix_job_title(self._job(title="The Matrix", year="0000")), "The Matrix")
+
+    def test_manual_title_preferred(self):
+        self.assertEqual(utils.fix_job_title(self._job(title="Auto", title_manual="Manual", year="")),
+                         "Manual")
+
+    def test_path_separators_stripped(self):
+        self.assertNotIn("/", utils.fix_job_title(self._job(title="Face/Off", year="1997")))
+
+    def test_traversal_neutralized(self):
+        result = utils.fix_job_title(self._job(title="../../etc", year=None))
+        self.assertNotIn("/", result)
+        self.assertFalse(result.startswith("."))
+
+
+class TestSaveDiscPoster(unittest.TestCase):
+
+    @mock.patch.object(utils.os, "system")
+    @mock.patch.object(utils.os.path, "isfile", side_effect=lambda p: p.endswith("J00___5L.MP2"))
+    @mock.patch.object(utils.subprocess, "run")
+    def test_poster_runs_list_form_no_shell(self, mock_run, mock_isfile, mock_system):
+        # The (title-derived) output dir must reach ffmpeg as a single argv
+        # element, never interpolated into a shell command.
+        job = SimpleNamespace(disctype="dvd", devpath="/dev/sr0", mountpoint="/mnt/disc")
+        with mock.patch.object(utils.cfg, "arm_config", {"RIP_POSTER": True}):
+            utils.save_disc_poster('/out/evil"; rm -rf ~', job)
+        # os.system (shell) must no longer be used for the poster/mount calls.
+        mock_system.assert_not_called()
+        # every subprocess call is argv-list form, no shell=True
+        self.assertTrue(mock_run.call_args_list)
+        for call in mock_run.call_args_list:
+            self.assertIsInstance(call.args[0], list)
+            self.assertNotEqual(call.kwargs.get("shell"), True)
+        ffmpeg_calls = [c for c in mock_run.call_args_list if c.args[0][0] == "ffmpeg"]
+        self.assertTrue(ffmpeg_calls)
+        self.assertIn('/out/evil"; rm -rf ~/poster.png', ffmpeg_calls[0].args[0])
+
+
 if __name__ == '__main__':
     unittest.main()

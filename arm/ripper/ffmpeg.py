@@ -227,7 +227,7 @@ def ffmpeg_main_feature(src_path, out_path, job):
     utils.database_updater({'status': "transcoding"}, job)
 
     # Prepare output filename
-    filename = os.path.join(job.title + "." + cfg.arm_config["DEST_EXT"])
+    filename = os.path.join(utils.safe_path_component(job.title) + "." + cfg.arm_config["DEST_EXT"])
     out_file_path = os.path.join(out_path, filename)
     logging.info(f"Ripping title main_feature to {shlex.quote(out_file_path)}")
 

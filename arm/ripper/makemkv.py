@@ -746,7 +746,7 @@ def makemkv(job):
                 raise ValueError(f"No drive found for device {job.devpath}")
     logging.info(f"MakeMKV disc number: {job.drive.mdisc:d}")
     # get filesystem in order
-    rawpath = setup_rawpath(job, os.path.join(str(job.config.RAW_PATH), str(job.title)))
+    rawpath = setup_rawpath(job, os.path.join(str(job.config.RAW_PATH), utils.safe_path_component(job.title)))
     logging.info(f"Processing files to: {rawpath}")
     # Rip BluRay
     if (job.config.RIPMETHOD in ("backup", "backup_dvd")) and job.disctype == "bluray":
@@ -875,7 +875,7 @@ def setup_rawpath(job, raw_path):
             logging.error(err)
     else:
         logging.info(f"{raw_path} exists.  Adding timestamp.")
-        raw_path = os.path.join(str(job.config.RAW_PATH), f"{job.title}_{job.stage}")
+        raw_path = os.path.join(str(job.config.RAW_PATH), f"{utils.safe_path_component(job.title)}_{job.stage}")
         logging.info(f"raw_path is {raw_path}")
         try:
             os.makedirs(raw_path)

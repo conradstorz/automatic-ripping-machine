@@ -29,7 +29,7 @@ from arm.models.track import Track
 from arm.models.user import User
 from arm.models.system_drives import SystemDrives
 from arm.ripper import apprise_bulk
-from arm.ripper.sanitize import sanitize_label
+from arm.ripper.sanitize import sanitize_label, safe_path_component
 
 NOTIFY_TITLE = "ARM notification"
 
@@ -173,7 +173,11 @@ def fix_job_title(job):
     """
     Validate the job title remove/add job year as needed\n
     :param job:
-    :return: corrected job.title
+    :return: corrected job.title, sanitized as a single safe path component
+
+    job.title is untrusted disc metadata; this builds the output folder/file
+    name from it, so the result is run through safe_path_component to strip
+    path separators and traversal before it reaches os.makedirs/shutil.move.
     """
     if job.year and job.year != "0000" and job.year != "":
         if job.title_manual:
@@ -185,7 +189,7 @@ def fix_job_title(job):
             job_title = f"{job.title_manual}"
         else:
             job_title = f"{job.title}"
-    return job_title
+    return safe_path_component(job_title)
 
 
 #  ############## Start of post processing functions
@@ -828,14 +832,19 @@ def save_disc_poster(final_directory, job):
     :return: None
     """
     if job.disctype == "dvd" and cfg.arm_config["RIP_POSTER"]:
-        os.system(f"mount {job.devpath}")
-        if os.path.isfile(job.mountpoint + "/JACKET_P/J00___5L.MP2"):
+        # List-form (no shell) so the device path, mountpoint, and the
+        # title-derived final_directory are never interpreted by a shell.
+        subprocess.run(["mount", job.devpath], check=False)
+        ntsc_poster = os.path.join(job.mountpoint, "JACKET_P", "J00___5L.MP2")
+        pal_poster = os.path.join(job.mountpoint, "JACKET_P", "J00___6L.MP2")
+        poster_out = os.path.join(final_directory, "poster.png")
+        if os.path.isfile(ntsc_poster):
             logging.info("Converting NTSC Poster Image")
-            os.system(f'ffmpeg -i "{job.mountpoint}/JACKET_P/J00___5L.MP2" "{final_directory}/poster.png"')
-        elif os.path.isfile(job.mountpoint + "/JACKET_P/J00___6L.MP2"):
+            subprocess.run(["ffmpeg", "-i", ntsc_poster, poster_out], check=False)
+        elif os.path.isfile(pal_poster):
             logging.info("Converting PAL Poster Image")
-            os.system(f'ffmpeg -i "{job.mountpoint}/JACKET_P/J00___6L.MP2" "{final_directory}/poster.png"')
-        os.system(f"umount {job.devpath}")
+            subprocess.run(["ffmpeg", "-i", pal_poster, poster_out], check=False)
+        subprocess.run(["umount", job.devpath], check=False)
 
 
 def check_for_dupe_folder(have_dupes, hb_out_path, job):

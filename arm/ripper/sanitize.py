@@ -31,3 +31,18 @@ def sanitize_label(raw):
     text = text.replace("/", "").replace("\\", "")
     text = _MULTI_DOT.sub(".", text)
     return text.strip().strip(".").strip()
+
+
+def safe_path_component(value, fallback="unknown"):
+    """Return a filesystem-safe single path component from an untrusted value.
+
+    Applies :func:`sanitize_label` and substitutes ``fallback`` when the value
+    is empty or sanitizes away to nothing, so callers always get a usable, safe
+    path segment. This is the sink helper for building output directories and
+    filenames from a disc title/label (see the video-rip path sinks). Note it
+    makes a value safe as a *path component*, not for a shell — shell sinks must
+    still avoid interpolation.
+    """
+    if not value:
+        return fallback
+    return sanitize_label(str(value)) or fallback
