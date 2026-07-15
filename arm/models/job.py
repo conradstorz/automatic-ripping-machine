@@ -40,6 +40,18 @@ def _listdir_safe(path):
         return []
 
 
+def _parse_lsdvd_title(output):
+    """Return the Disc Title from lsdvd's text output, or "" if absent.
+
+    Replaces the old ``grep 'Disc Title' | cut -d ' ' -f 3-`` shell pipeline so
+    lsdvd can be run without a shell.
+    """
+    for line in output.splitlines():
+        if line.strip().startswith("Disc Title:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
 class JobState(str, enum.Enum):
     """Possible states for Job.status.
 
@@ -172,10 +184,31 @@ class Job(db.Model):
         self.has_track_99 = False
 
         if self.disctype == "dvd" and not self.label:
-            logging.info("No disk label Available. Trying lsdvd")
-            command = f"lsdvd {devpath} | grep 'Disc Title' | cut -d ' ' -f 3-"
-            lsdvdlbl = str(subprocess.check_output(command, shell=True).strip(), 'utf-8')
-            self.label = lsdvdlbl
+            self._apply_lsdvd_label()
+
+    def _apply_lsdvd_label(self):
+        """Fill an empty DVD label from lsdvd's Disc Title.
+
+        Runs lsdvd in list form (no shell) so the device path is never
+        interpreted by a shell, and parses the Disc Title in Python instead of
+        piping through grep/cut. Stores the raw title; the label is untrusted
+        disc metadata but is sanitized only where it becomes a filesystem path
+        (rip_data, logger), not here, so metadata lookup and the dupe-check
+        query see the original.
+        """
+        logging.info("No disk label Available. Trying lsdvd")
+        try:
+            # check=False: lsdvd can exit nonzero (e.g. a CSS warning) yet still
+            # print a usable Disc Title, which the old grep|cut pipeline kept.
+            # timeout guards against a hung lsdvd stalling disc-insert handling.
+            result = subprocess.run(["lsdvd", self.devpath], capture_output=True, timeout=60, check=False)
+        except (OSError, subprocess.SubprocessError) as error:
+            # OSError: missing (FileNotFoundError) or non-executable
+            # (PermissionError) lsdvd. SubprocessError: a timeout. Tolerate both
+            # rather than crashing Job.__init__ on disc insert.
+            logging.debug(f"lsdvd label lookup failed: {error}")
+            return
+        self.label = _parse_lsdvd_title(result.stdout.decode("utf-8", errors="replace"))
 
     def __str__(self):
         """Returns a string of the object"""
@@ -198,6 +231,8 @@ class Job(db.Model):
         for key, value in device.items():
             logging.debug(f"pyudev: {key}: {value}")
             if key == "ID_FS_LABEL":
+                # Store the raw label; it is sanitized only where it becomes a
+                # filesystem path (rip_data, logger), not here.
                 self.label = value
                 if value == "iso9660":
                     self.disctype = "data"

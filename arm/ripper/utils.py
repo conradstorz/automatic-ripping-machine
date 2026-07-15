@@ -4,6 +4,7 @@ import datetime
 import os
 import logging
 import subprocess
+import shlex
 import shutil
 import time
 import random
@@ -28,6 +29,7 @@ from arm.models.track import Track
 from arm.models.user import User
 from arm.models.system_drives import SystemDrives
 from arm.ripper import apprise_bulk
+from arm.ripper.sanitize import sanitize_label, safe_path_component
 
 NOTIFY_TITLE = "ARM notification"
 
@@ -171,7 +173,11 @@ def fix_job_title(job):
     """
     Validate the job title remove/add job year as needed\n
     :param job:
-    :return: corrected job.title
+    :return: corrected job.title, sanitized as a single safe path component
+
+    job.title is untrusted disc metadata; this builds the output folder/file
+    name from it, so the result is run through safe_path_component to strip
+    path separators and traversal before it reaches os.makedirs/shutil.move.
     """
     if job.year and job.year != "0000" and job.year != "":
         if job.title_manual:
@@ -183,7 +189,7 @@ def fix_job_title(job):
             job_title = f"{job.title_manual}"
         else:
             job_title = f"{job.title}"
-    return job_title
+    return safe_path_component(job_title)
 
 
 #  ############## Start of post processing functions
@@ -477,6 +483,16 @@ def rip_music(job, logfile):
     return False
 
 
+def build_dd_command(devpath, out_path, params):
+    """Build a list-form (no-shell) ``dd`` argv for ripping a data disc.
+
+    Passing argv as a list means the destination path is a single argument;
+    shell metacharacters in it are never interpreted. ``params`` is the
+    admin-configured ``DATA_RIP_PARAMETERS`` string, split into separate args.
+    """
+    return ["dd", f"if={devpath}", f"of={out_path}", *shlex.split(params or "")]
+
+
 def rip_data(job):
     """
     Rip data disc using dd on the command line\n
@@ -486,43 +502,71 @@ def rip_data(job):
     success = False
     if job.label == "" or job.label is None:
         job.label = "data-disc"
+    # Sanitize the (attacker-controllable) disc label into a local name used
+    # only for path building. job.label itself stays raw so the dupe-check
+    # query and label display keep the original value.
+    safe_label = sanitize_label(str(job.label)) or "data-disc"
     # get filesystem in order
-    raw_path = os.path.join(job.config.RAW_PATH, str(job.label))
+    raw_path = os.path.join(job.config.RAW_PATH, safe_label)
     final_path = os.path.join(job.config.COMPLETED_PATH, convert_job_type(job.video_type))
-    final_file_name = str(job.label)
+    final_file_name = safe_label
 
     if (make_dir(raw_path)) is False:
         random_time = str(round(time.time() * 100))
-        raw_path = os.path.join(job.config.RAW_PATH, str(job.label) + "_" + random_time)
-        final_file_name = f"{job.label}_{random_time}"
+        raw_path = os.path.join(job.config.RAW_PATH, safe_label + "_" + random_time)
+        final_file_name = f"{safe_label}_{random_time}"
         make_dir(raw_path, False)
 
     final_path = os.path.join(final_path, final_file_name)
-    incomplete_filename = os.path.join(raw_path, str(job.label) + ".part")
+    incomplete_filename = os.path.join(raw_path, safe_label + ".part")
     make_dir(final_path)
     logging.info(f"Ripping data disc to: {incomplete_filename}")
     # Added from pull 366
-    cmd = f'dd if="{job.devpath}" of="{incomplete_filename}" {cfg.arm_config["DATA_RIP_PARAMETERS"]} 2>> ' \
-          f'{os.path.join(job.config.LOGPATH, job.logfile)}'
-    logging.debug(f"Sending command: {cmd}")
+    log_path = os.path.join(job.config.LOGPATH, job.logfile)
+    # Build the command and run dd inside the try: dropping shell=True means a
+    # missing dd binary (FileNotFoundError), an unwritable logfile (OSError), or
+    # a malformed DATA_RIP_PARAMETERS (shlex ValueError) surface as their own
+    # exception types, none of which are CalledProcessError. Catch them all so a
+    # rip failure marks the job FAILURE instead of crashing the ripper mid-job.
     try:
-        subprocess.check_output(cmd, shell=True).decode("utf-8")
-        full_final_file = os.path.join(final_path, f"{str(job.label)}.iso")
+        dd_cmd = build_dd_command(job.devpath, incomplete_filename, cfg.arm_config["DATA_RIP_PARAMETERS"])
+        logging.debug(f"Sending command: {dd_cmd}")
+        with open(log_path, "a", encoding="utf-8") as log_fh:
+            subprocess.check_output(dd_cmd, stderr=log_fh).decode("utf-8")
+        full_final_file = os.path.join(final_path, f"{safe_label}.iso")
         logging.info(f"Moving data-disc from '{incomplete_filename}' to '{full_final_file}'")
         move_files_main(incomplete_filename, full_final_file, final_path)
-        logging.info("Data rip call successful")
-        success = True
-    except subprocess.CalledProcessError as dd_error:
-        err = f"Data rip failed with code: {dd_error.returncode}({dd_error.output})"
+        # move_files_main swallows its own errors, so confirm the ISO actually
+        # arrived before reporting success -- otherwise the raw_path cleanup
+        # below would delete the .part that was never moved (silent data loss).
+        if os.path.isfile(full_final_file):
+            logging.info("Data rip call successful")
+            success = True
+        else:
+            err = f"Data rip move failed: '{full_final_file}' not created; keeping source '{incomplete_filename}'"
+            logging.error(err)
+            database_updater({"status": JobState.FAILURE.value, "errors": err}, job)
+    except (subprocess.CalledProcessError, OSError, ValueError) as dd_error:
+        returncode = getattr(dd_error, "returncode", "n/a")
+        detail = getattr(dd_error, "output", None) or dd_error
+        err = f"Data rip failed with code: {returncode}({detail})"
         logging.error(err)
-        os.unlink(incomplete_filename)
+        # The .part file may never have been created (e.g. dd could not open the
+        # device); guard the cleanup so it cannot mask the failure status.
+        try:
+            os.unlink(incomplete_filename)
+        except OSError as unlink_error:
+            logging.error(f"Could not remove incomplete file '{incomplete_filename}': {unlink_error}")
         args = {"status": JobState.FAILURE.value, "errors": err}
         database_updater(args, job)
-    try:
-        logging.info(f"Trying to remove raw_path: '{raw_path}'")
-        shutil.rmtree(raw_path)
-    except OSError as error:
-        logging.error(f"Error: {error.filename} - {error.strerror}.")
+    # Only clear the working directory once the ISO was moved out successfully;
+    # on failure the .part still lives here and must be kept for retry/recovery.
+    if success:
+        try:
+            logging.info(f"Trying to remove raw_path: '{raw_path}'")
+            shutil.rmtree(raw_path)
+        except OSError as error:
+            logging.error(f"Error: {error.filename} - {error.strerror}.")
     return success
 
 
@@ -743,7 +787,11 @@ def check_ip():
 
 
 def clean_for_filename(string):
-    """ Cleans up string for use in filename """
+    """Cleans up a (trusted) string for use in a filename.
+
+    Aesthetic cleanup only, NOT a security boundary: for untrusted disc labels
+    use ``arm.ripper.sanitize.sanitize_label`` instead.
+    """
     string = re.sub('\\[(.*?)]', '', string)
     string = re.sub('\\s+', '-', string)
     string = string.replace(' : ', ' - ')
@@ -795,14 +843,27 @@ def save_disc_poster(final_directory, job):
     :return: None
     """
     if job.disctype == "dvd" and cfg.arm_config["RIP_POSTER"]:
-        os.system(f"mount {job.devpath}")
-        if os.path.isfile(job.mountpoint + "/JACKET_P/J00___5L.MP2"):
+        # List-form (no shell) so the device path, mountpoint, and the
+        # title-derived final_directory are never interpreted by a shell.
+        def _poster_cmd(cmd):
+            # Best-effort: a missing mount/ffmpeg/umount must not abort the rip
+            # (os.system merely returned nonzero; subprocess.run raises).
+            try:
+                subprocess.run(cmd, check=False)
+            except OSError as error:
+                logging.error(f"Poster step '{cmd[0]}' skipped: {error}")
+
+        _poster_cmd(["mount", job.devpath])
+        ntsc_poster = os.path.join(job.mountpoint, "JACKET_P", "J00___5L.MP2")
+        pal_poster = os.path.join(job.mountpoint, "JACKET_P", "J00___6L.MP2")
+        poster_out = os.path.join(final_directory, "poster.png")
+        if os.path.isfile(ntsc_poster):
             logging.info("Converting NTSC Poster Image")
-            os.system(f'ffmpeg -i "{job.mountpoint}/JACKET_P/J00___5L.MP2" "{final_directory}/poster.png"')
-        elif os.path.isfile(job.mountpoint + "/JACKET_P/J00___6L.MP2"):
+            _poster_cmd(["ffmpeg", "-i", ntsc_poster, poster_out])
+        elif os.path.isfile(pal_poster):
             logging.info("Converting PAL Poster Image")
-            os.system(f'ffmpeg -i "{job.mountpoint}/JACKET_P/J00___6L.MP2" "{final_directory}/poster.png"')
-        os.system(f"umount {job.devpath}")
+            _poster_cmd(["ffmpeg", "-i", pal_poster, poster_out])
+        _poster_cmd(["umount", job.devpath])
 
 
 def check_for_dupe_folder(have_dupes, hb_out_path, job):
