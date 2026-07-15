@@ -173,10 +173,21 @@ class Job(db.Model):
         self.has_track_99 = False
 
         if self.disctype == "dvd" and not self.label:
-            logging.info("No disk label Available. Trying lsdvd")
-            command = f"lsdvd {devpath} | grep 'Disc Title' | cut -d ' ' -f 3-"
-            lsdvdlbl = str(subprocess.check_output(command, shell=True).strip(), 'utf-8')
-            self.label = sanitize_label(lsdvdlbl)
+            self._apply_lsdvd_label()
+
+    def _apply_lsdvd_label(self):
+        """Fill an empty DVD label from lsdvd's Disc Title, sanitized.
+
+        Only assigns when sanitization leaves a non-empty result, so a label
+        made up entirely of stripped characters cannot blank the label into an
+        empty path component.
+        """
+        logging.info("No disk label Available. Trying lsdvd")
+        command = f"lsdvd {self.devpath} | grep 'Disc Title' | cut -d ' ' -f 3-"
+        lsdvdlbl = str(subprocess.check_output(command, shell=True).strip(), 'utf-8')
+        label = sanitize_label(lsdvdlbl)
+        if label:
+            self.label = label
 
     def __str__(self):
         """Returns a string of the object"""
@@ -199,7 +210,11 @@ class Job(db.Model):
         for key, value in device.items():
             logging.debug(f"pyudev: {key}: {value}")
             if key == "ID_FS_LABEL":
-                self.label = sanitize_label(value)
+                # Only apply a non-empty sanitized label so a garbage label
+                # cannot blank self.label into an empty path component.
+                label = sanitize_label(value)
+                if label:
+                    self.label = label
                 if value == "iso9660":
                     self.disctype = "data"
             elif key == "ID_CDROM_MEDIA_BD":
