@@ -11,6 +11,7 @@ from prettytable import PrettyTable
 from sqlalchemy.ext.hybrid import hybrid_property
 
 from arm.ripper import music_brainz
+from arm.ripper.sanitize import sanitize_label
 from arm.ui import db
 import arm.config.config as cfg
 
@@ -175,7 +176,7 @@ class Job(db.Model):
             logging.info("No disk label Available. Trying lsdvd")
             command = f"lsdvd {devpath} | grep 'Disc Title' | cut -d ' ' -f 3-"
             lsdvdlbl = str(subprocess.check_output(command, shell=True).strip(), 'utf-8')
-            self.label = lsdvdlbl
+            self.label = sanitize_label(lsdvdlbl)
 
     def __str__(self):
         """Returns a string of the object"""
@@ -198,7 +199,7 @@ class Job(db.Model):
         for key, value in device.items():
             logging.debug(f"pyudev: {key}: {value}")
             if key == "ID_FS_LABEL":
-                self.label = value
+                self.label = sanitize_label(value)
                 if value == "iso9660":
                     self.disctype = "data"
             elif key == "ID_CDROM_MEDIA_BD":
