@@ -1,29 +1,212 @@
 {% block ripper %}
     <div class="tab-pane pt-5" id="settings" role="tabpanel" aria-labelledby="settings-tab">
-        <h4> Ripper ARM Settings </h4>
-        <form id="ripperSettings" name="ripperSettings" method="post" action="">
-            {{ form.hidden_tag() }}
-            {% for k, v in settings.items() %}
-                <div class="input-group mb-3">
-                    <div class="input-group-prepend">
-                        <span class="input-group-text" id="{{ k }}">{{ k }}: </span>
-                    </div>
-                    <input type="text" class="form-control" aria-label="{{ k }}" name="{{ k }}"
-                           placeholder="{{ v }}" value="{{ v }}" aria-describedby="{{ k }}"
-                           {% if ripper_read_only %}
-                             disabled="" title="arm.yaml is read-only"
-                           {% endif %}>
-                    <a class="popovers" onClick='return false;' href=""
-                       data-content="{{ jsoncomments[k]| replace("#", "\n") }}" rel="popover"
-                       data-placement="top" data-original-title="{{ k }}">
-                        <img title="More information" src="{{ url_for('static', filename='img/info.png') }}" width="30px"
-                             height="35px" alt="More Info">
-                    </a>
+        <style>
+        #rs-root{
+          --rs-bg:#0e141c;--rs-panel:#161f2b;--rs-panel2:#1b2634;--rs-raise:#202d3d;
+          --rs-line:#26333f;--rs-line-soft:#1f2b37;--rs-text:#e8eef6;--rs-muted:#93a1b3;--rs-faint:#62717f;
+          --rs-accent:#34c9d1;--rs-accent-ink:#06171a;--rs-accent-soft:#16323a;
+          --rs-good:#46c07a;--rs-warn:#e6a93c;--rs-crit:#e86a63;
+          --rs-chip:#101a24;--rs-chip-line:#2b3a49;
+          --rs-mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+          color:var(--rs-text);
+        }
+        #rs-root *{box-sizing:border-box;}
+        #rs-root .rs-lede h4{font-size:22px;font-weight:680;margin:0;}
+        #rs-root .rs-lede p{color:var(--rs-muted);margin:6px 0 0;max-width:64ch;}
+        #rs-root .rs-bar{display:flex;align-items:center;gap:14px;margin:6px 0 20px;flex-wrap:wrap;}
+        #rs-root .rs-search{position:relative;flex:1;min-width:220px;}
+        #rs-root .rs-search input{width:100%;padding:9px 12px 9px 34px;border-radius:9px;background:var(--rs-panel2);
+          border:1px solid var(--rs-line);color:var(--rs-text);font-size:14px;}
+        #rs-root .rs-search input::placeholder{color:var(--rs-faint);}
+        #rs-root .rs-search input:focus{outline:none;border-color:var(--rs-accent);box-shadow:0 0 0 3px var(--rs-accent-soft);}
+        #rs-root .rs-search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--rs-faint);}
+        #rs-root .rs-ro{color:var(--rs-warn);font-size:13px;display:flex;align-items:center;gap:7px;}
+
+        #rs-root .rs-shell{display:grid;grid-template-columns:212px minmax(0,1fr);gap:26px;align-items:start;}
+        #rs-root .rs-side{position:sticky;top:12px;display:flex;flex-direction:column;gap:3px;}
+        #rs-root .rs-nav{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:9px;color:var(--rs-muted);
+          cursor:pointer;border:1px solid transparent;font-size:13.5px;}
+        #rs-root .rs-nav:hover{background:var(--rs-panel);color:var(--rs-text);}
+        #rs-root .rs-nav.active{background:var(--rs-panel);color:var(--rs-text);border-color:var(--rs-line);}
+        #rs-root .rs-nav .rs-dot{width:7px;height:7px;border-radius:50%;background:var(--rs-chip-line);flex:none;}
+        #rs-root .rs-nav.active .rs-dot{background:var(--rs-accent);}
+        #rs-root .rs-nav .rs-ct{margin-left:auto;font-size:12px;color:var(--rs-faint);
+          background:var(--rs-chip);border:1px solid var(--rs-line);border-radius:20px;padding:0 8px;
+          font-variant-numeric:tabular-nums;}
+
+        #rs-root .rs-group{margin-bottom:26px;}
+        #rs-root .rs-ghead{display:flex;align-items:baseline;gap:11px;padding-bottom:11px;
+          border-bottom:1px solid var(--rs-line);}
+        #rs-root .rs-ghead h5{font-size:15px;font-weight:640;margin:0;}
+        #rs-root .rs-ghead .rs-gsub{color:var(--rs-faint);font-size:13px;}
+        #rs-root .rs-setting{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:20px;align-items:center;
+          padding:14px 4px;border-bottom:1px solid var(--rs-line-soft);}
+        #rs-root .rs-setting:last-child{border-bottom:0;}
+        #rs-root .rs-label{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+        #rs-root .rs-name{font-weight:600;font-size:14.5px;}
+        #rs-root .rs-key{font-family:var(--rs-mono);font-size:11.5px;color:var(--rs-muted);background:var(--rs-chip);
+          border:1px solid var(--rs-chip-line);padding:1px 7px;border-radius:6px;}
+        #rs-root .rs-tag{font-size:11px;font-weight:600;padding:1px 8px;border-radius:20px;}
+        #rs-root .rs-tag.rs-warn{color:var(--rs-warn);background:rgba(230,169,60,.15);border:1px solid rgba(230,169,60,.4);}
+        #rs-root .rs-tag.rs-crit{color:var(--rs-crit);background:rgba(232,106,99,.15);border:1px solid rgba(232,106,99,.4);}
+        #rs-root .rs-desc{color:var(--rs-muted);font-size:13px;margin-top:4px;max-width:66ch;}
+        #rs-root .rs-control{justify-self:end;width:100%;display:flex;justify-content:flex-end;}
+
+        #rs-root .rs-txt,#rs-root .rs-sel{width:100%;padding:8px 11px;border-radius:9px;background:var(--rs-panel2);
+          border:1px solid var(--rs-line);color:var(--rs-text);font-size:14px;}
+        #rs-root .rs-txt.rs-mono{font-family:var(--rs-mono);font-size:12.5px;}
+        #rs-root .rs-txt:focus,#rs-root .rs-sel:focus{outline:none;border-color:var(--rs-accent);box-shadow:0 0 0 3px var(--rs-accent-soft);}
+        #rs-root .rs-sel{appearance:none;cursor:pointer;padding-right:30px;
+          background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2393a1b3' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+          background-repeat:no-repeat;background-position:right 10px center;}
+        #rs-root .rs-num{display:flex;align-items:center;gap:8px;justify-content:flex-end;width:100%;}
+        #rs-root .rs-num input{width:110px;text-align:right;font-variant-numeric:tabular-nums;}
+        #rs-root .rs-num .rs-unit{color:var(--rs-faint);font-size:13px;min-width:28px;}
+        #rs-root .rs-switch{position:relative;display:inline-flex;align-items:center;gap:10px;cursor:pointer;}
+        #rs-root .rs-switch input{position:absolute;opacity:0;width:0;height:0;}
+        #rs-root .rs-track{width:42px;height:24px;border-radius:20px;background:var(--rs-chip-line);transition:background .18s;flex:none;}
+        #rs-root .rs-thumb{position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#fff;
+          transition:transform .18s;box-shadow:0 1px 3px rgba(0,0,0,.35);}
+        #rs-root .rs-switch input:checked~.rs-track{background:var(--rs-accent);}
+        #rs-root .rs-switch input:checked~.rs-thumb{transform:translateX(18px);}
+        #rs-root .rs-switch .rs-state{font-size:13px;color:var(--rs-muted);min-width:24px;}
+        #rs-root .rs-empty{display:none;text-align:center;color:var(--rs-faint);padding:50px 0;}
+        #rs-root .rs-empty.rs-show{display:block;}
+        #rs-root .rs-save{margin-top:10px;background:var(--rs-accent);color:var(--rs-accent-ink);border:1px solid var(--rs-accent);
+          font-weight:650;padding:11px 18px;border-radius:10px;cursor:pointer;font-size:15px;}
+        #rs-root .rs-save:hover{filter:brightness(1.06);}
+        @media (max-width:820px){
+          #rs-root .rs-shell{grid-template-columns:1fr;}
+          #rs-root .rs-side{position:static;flex-direction:row;flex-wrap:wrap;}
+          #rs-root .rs-setting{grid-template-columns:1fr;gap:12px;}
+          #rs-root .rs-control{justify-self:stretch;}#rs-root .rs-num,#rs-root .rs-switch{justify-content:flex-start;}
+        }
+        </style>
+
+        <div id="rs-root">
+          <div class="rs-lede">
+            <h4>Ripper settings</h4>
+            <p>How ARM identifies discs, where files go, and how it transcodes. Each setting maps to a key in
+               <span style="font-family:var(--rs-mono);font-size:13px">arm.yaml</span> — shown beside its name.</p>
+          </div>
+
+          <div class="rs-bar">
+            <div class="rs-search">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+              <input id="rs-q" type="text" placeholder="Search settings, keys, descriptions…" autocomplete="off">
+            </div>
+            {% if ripper_read_only %}
+              <span class="rs-ro">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                arm.yaml is read-only
+              </span>
+            {% endif %}
+          </div>
+
+          <div class="rs-shell">
+            <aside class="rs-side">
+              {% for group in ripper_groups %}
+                <div class="rs-nav" data-g="{{ group.id }}">
+                  <span class="rs-dot"></span>{{ group.label }}<span class="rs-ct">{{ group.fields|length }}</span>
                 </div>
-            {% endfor %}
-            <button id="settings" class="btn btn-secondary btn-lg btn-block" form="ripperSettings"
-                    type="submit">Submit
-            </button>
-        </form>
+              {% endfor %}
+            </aside>
+
+            <form id="ripperSettings" name="ripperSettings" method="post" action="">
+              {{ form.hidden_tag() }}
+              {% for group in ripper_groups %}
+                <section class="rs-group" data-g="{{ group.id }}">
+                  <div class="rs-ghead"><h5>{{ group.label }}</h5><span class="rs-gsub">{{ group.sub }}</span></div>
+                  {% for f in group.fields %}
+                    <div class="rs-setting" data-search="{{ (f.label ~ ' ' ~ f.key ~ ' ' ~ f.desc)|lower }}">
+                      <div class="rs-main">
+                        <div class="rs-label">
+                          <span class="rs-name">{{ f.label }}</span>
+                          <span class="rs-key">{{ f.key }}</span>
+                          {% if f.tag %}<span class="rs-tag rs-{{ f.tag.c }}">{{ f.tag.t }}</span>{% endif %}
+                        </div>
+                        {% if f.desc %}<div class="rs-desc">{{ f.desc }}</div>{% endif %}
+                      </div>
+                      <div class="rs-control">
+                        {% if f.type == 'bool' %}
+                          <label class="rs-switch">
+                            <input type="checkbox" class="rs-tgl" data-key="{{ f.key }}"
+                                   {% if f.value == 'true' %}checked{% endif %}
+                                   {% if ripper_read_only %}disabled{% endif %}>
+                            <span class="rs-track"></span><span class="rs-thumb"></span>
+                            <span class="rs-state">{{ 'On' if f.value == 'true' else 'Off' }}</span>
+                          </label>
+                          <input type="hidden" name="{{ f.key }}" value="{{ f.value }}" data-hidden="{{ f.key }}">
+                        {% elif f.type == 'enum' %}
+                          <select class="rs-sel" name="{{ f.key }}" {% if ripper_read_only %}disabled{% endif %}>
+                            {% if f.value not in f.options %}<option selected>{{ f.value }}</option>{% endif %}
+                            {% for o in f.options %}<option {% if o == f.value %}selected{% endif %}>{{ o }}</option>{% endfor %}
+                          </select>
+                        {% elif f.type == 'number' %}
+                          <div class="rs-num">
+                            <input class="rs-txt" type="text" inputmode="numeric" name="{{ f.key }}"
+                                   value="{{ f.value }}" {% if ripper_read_only %}disabled{% endif %}>
+                            <span class="rs-unit">{{ f.unit }}</span>
+                          </div>
+                        {% elif f.type == 'path' %}
+                          <input class="rs-txt rs-mono" type="text" name="{{ f.key }}"
+                                 value="{{ f.value }}" {% if ripper_read_only %}disabled{% endif %}>
+                        {% else %}
+                          <input class="rs-txt" type="text" name="{{ f.key }}"
+                                 value="{{ f.value }}" {% if ripper_read_only %}disabled{% endif %}>
+                        {% endif %}
+                      </div>
+                    </div>
+                  {% endfor %}
+                </section>
+              {% endfor %}
+              <div class="rs-empty" id="rs-empty">No settings match your search.</div>
+              <button class="rs-save" type="submit" form="ripperSettings"
+                      {% if ripper_read_only %}disabled title="arm.yaml is read-only"{% endif %}>Save changes</button>
+            </form>
+          </div>
+        </div>
+
+        <script>
+        (function(){
+          var root = document.getElementById("rs-root");
+          if(!root) return;
+          // toggle -> keep hidden input in sync so booleans always serialize
+          root.querySelectorAll(".rs-tgl").forEach(function(t){
+            t.addEventListener("change", function(){
+              var h = root.querySelector('[data-hidden="'+t.getAttribute("data-key")+'"]');
+              if(h) h.value = t.checked ? "true" : "false";
+              var s = t.parentElement.querySelector(".rs-state");
+              if(s) s.textContent = t.checked ? "On" : "Off";
+            });
+          });
+          // live search
+          var q = document.getElementById("rs-q");
+          var empty = document.getElementById("rs-empty");
+          q.addEventListener("input", function(){
+            var term = q.value.trim().toLowerCase(), any = false;
+            root.querySelectorAll(".rs-group").forEach(function(g){
+              var has = false;
+              g.querySelectorAll(".rs-setting").forEach(function(row){
+                var hit = !term || row.getAttribute("data-search").indexOf(term) !== -1;
+                row.style.display = hit ? "" : "none";
+                if(hit) has = true;
+              });
+              g.style.display = has ? "" : "none";
+              if(has) any = true;
+            });
+            empty.classList.toggle("rs-show", !any);
+          });
+          // side-nav jump
+          root.querySelectorAll(".rs-nav").forEach(function(n){
+            n.addEventListener("click", function(){
+              var g = root.querySelector('.rs-group[data-g="'+n.getAttribute("data-g")+'"]');
+              if(g) g.scrollIntoView({behavior:"smooth", block:"start"});
+              root.querySelectorAll(".rs-nav").forEach(function(x){x.classList.remove("active");});
+              n.classList.add("active");
+            });
+          });
+        })();
+        </script>
     </div>
 {% endblock %}

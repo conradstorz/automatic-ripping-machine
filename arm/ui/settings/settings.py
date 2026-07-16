@@ -39,6 +39,7 @@ import arm.config.config as cfg
 from arm.ui.settings import DriveUtils as drive_utils
 from arm.ui.forms import SettingsForm, UiSettingsForm, AbcdeForm, SystemInfoDrives
 from arm.ui.settings.ServerUtil import ServerUtil
+from arm.ui.settings.ripper_fields import build_field_model
 import arm.ripper.utils as ripper_utils
 
 route_settings = Blueprint('route_settings', __name__,
@@ -140,6 +141,7 @@ def settings():
                            drives=drives,
                            form_drive=form_drive,
                            ripper_read_only=is_read_only(cfg.arm_config_path),
+                           ripper_groups=build_field_model(cfg.arm_config, comments),
                            apprise_read_only=is_read_only(cfg.apprise_config_path),
                            abcde_read_only=is_read_only(cfg.abcde_config_path))
 
