@@ -23,11 +23,12 @@
         #rs-root .rs-ro{color:var(--rs-warn);font-size:13px;display:flex;align-items:center;gap:7px;}
 
         #rs-root .rs-shell{display:grid;grid-template-columns:212px minmax(0,1fr);gap:26px;align-items:start;}
-        #rs-root .rs-side{position:sticky;top:12px;display:flex;flex-direction:column;gap:3px;}
+        #rs-root .rs-side{position:sticky;top:12px;display:flex;flex-direction:column;gap:3px;
+          background:var(--rs-panel);border:1px solid var(--rs-line);border-radius:12px;padding:8px;}
         #rs-root .rs-nav{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:9px;color:var(--rs-muted);
           cursor:pointer;border:1px solid transparent;font-size:13.5px;}
-        #rs-root .rs-nav:hover{background:var(--rs-panel);color:var(--rs-text);}
-        #rs-root .rs-nav.active{background:var(--rs-panel);color:var(--rs-text);border-color:var(--rs-line);}
+        #rs-root .rs-nav:hover{background:var(--rs-raise);color:var(--rs-text);}
+        #rs-root .rs-nav.active{background:var(--rs-raise);color:var(--rs-text);border-color:var(--rs-chip-line);}
         #rs-root .rs-nav .rs-dot{width:7px;height:7px;border-radius:50%;background:var(--rs-chip-line);flex:none;}
         #rs-root .rs-nav.active .rs-dot{background:var(--rs-accent);}
         #rs-root .rs-nav .rs-ct{margin-left:auto;font-size:12px;color:var(--rs-faint);
@@ -35,8 +36,9 @@
           font-variant-numeric:tabular-nums;}
 
         #rs-root .rs-group{margin-bottom:26px;}
-        #rs-root .rs-ghead{display:flex;align-items:baseline;gap:11px;padding-bottom:11px;
-          border-bottom:1px solid var(--rs-line);}
+        #rs-root .rs-ghead{display:flex;align-items:baseline;gap:11px;padding:10px 14px;margin-bottom:8px;
+          background:var(--rs-panel2);border:1px solid var(--rs-line);border-left:3px solid var(--rs-accent);
+          border-radius:9px;}
         #rs-root .rs-ghead h5{font-size:15px;font-weight:640;margin:0;}
         #rs-root .rs-ghead .rs-gsub{color:var(--rs-faint);font-size:13px;}
         #rs-root .rs-setting{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:20px;align-items:center;
