@@ -1,0 +1,57 @@
+# Production takeover on hpz440: run the LOCAL dev image (arm-dev:local, ARM 2.24.0)
+# as the real ripper, controlling the optical drives and using the real host data.
+#
+# This replaces the official `arm-rippers` container (ARM 2.18.3), which has been
+# stopped with its restart policy disabled for easy rollback. Only one container may
+# hold /dev/sr* at a time (each runs its own udevd and would otherwise both rip the
+# same disc), so keep `arm-rippers` stopped while this is up.
+#
+# The image is prebuilt (`docker compose -f docker-compose.dev.yml build`); this file
+# does not rebuild. Bind mounts and ports bind on the DAEMON host (hpz440), not locally.
+#
+#   Bring up:  MSYS_NO_PATHCONV=1 docker compose -f docker-compose.hpz440-prod.yml up -d
+#   Rollback:  docker compose -f docker-compose.hpz440-prod.yml down
+#              docker update --restart=always arm-rippers && docker start arm-rippers
+services:
+  arm-rippers-dev:
+    image: arm-dev:local
+    container_name: arm-rippers-dev
+    privileged: true
+    restart: unless-stopped
+    # Match the official production container's exposure so existing clients keep working.
+    ports:
+      - "100.69.239.123:49152:8080"
+    # Match host file ownership (1002:1002) and the production locale.
+    environment:
+      ARM_UID: "1002"
+      ARM_GID: "1002"
+      TZ: "New_York"
+      PYTHONUNBUFFERED: "1"
+      # Site-wide "development server" banner so it is obvious this is the 2.24.0 dev build.
+      ARM_DEV_SERVER: "1"
+    # The three optical drives on hpz440.
+    devices:
+      - "/dev/sr0:/dev/sr0"
+      - "/dev/sr1:/dev/sr1"
+      - "/dev/sr2:/dev/sr2"
+    # The REAL production data on the host (same mount list the official container used;
+    # media/music may be separate host filesystems, so bind each explicitly).
+    volumes:
+      - /etc/arm/config:/etc/arm/config
+      - /home/arm:/home/arm
+      - /home/arm/logs:/home/arm/logs
+      - /home/arm/media:/home/arm/media
+      - /home/arm/music:/home/arm/music
+    # Ownership-fix entrypoint, then hand off to real init. Besides the state dirs,
+    # this also re-owns any staged config files (arm.yaml / *.conf) to the arm user:
+    # they were originally staged root-owned by the official container, which made the
+    # UI's Settings pages read-only (os.access(W_OK) fails for the non-root arm user).
+    # The glob is guarded so a fresh install with no staged files still boots.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - >-
+        mkdir -p /home/arm /etc/arm/config &&
+        chown "$${ARM_UID}:$${ARM_GID}" /home/arm /etc/arm/config &&
+        { chown "$${ARM_UID}:$${ARM_GID}" /etc/arm/config/*.yaml /etc/arm/config/*.conf 2>/dev/null || true; } &&
+        exec /sbin/my_init
