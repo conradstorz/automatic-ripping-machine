@@ -204,6 +204,21 @@ class SystemDrives(db.Model):  # pylint: disable=too-many-instance-attributes
         """Drive has medium loaded and is ready for reading."""
         return self.tray == CDS.DISC_OK
 
+    @property
+    def drawer_status(self):
+        """Human-readable drawer/tray state for UI display.
+
+        Maps the CDS tray status to a plain label: 'Open' when the tray is
+        out, 'Closed' for any readable closed state (empty, disc loaded, or
+        spinning up), and 'Unavailable' for a stale drive or an unreadable
+        tray status (CDS.ERROR).
+        """
+        if self.stale or self.tray == CDS.ERROR:
+            return "Unavailable"
+        if self.open:
+            return "Open"
+        return "Closed"
+
     def eject(self, method="eject"):
         """Open or close the drive
 

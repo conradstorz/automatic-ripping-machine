@@ -33,6 +33,18 @@
                                                         <div class="col-sm-4 col-form-label px-1">Type</div>
                                                         <div class="col-sm-8 col-form-label px-1 small" id="type">{{ drive.type }}</div>
                                                     </div>
+                                                    <div class="form-group row my-0">
+                                                        <div class="col-sm-4 col-form-label px-1">Drawer</div>
+                                                        <div class="col-sm-8 col-form-label px-1 small">
+                                                            {% if drive.drawer_status == 'Open' %}
+                                                                <span class="badge badge-warning">Open</span>
+                                                            {% elif drive.drawer_status == 'Closed' %}
+                                                                <span class="badge badge-secondary">Closed</span>
+                                                            {% else %}
+                                                                <span class="badge badge-light">Unavailable</span>
+                                                            {% endif %}
+                                                        </div>
+                                                    </div>
                                                     {% if drive.mount %}
                                                         <div class="form-group row my-0">
                                                             <div class="col-sm-4 col-form-label px-1 px-1">Mount Path</div>
