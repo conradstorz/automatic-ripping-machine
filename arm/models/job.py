@@ -326,8 +326,15 @@ class Job(db.Model):
                 return_dict[str(key)] = str(value)
         return return_dict
 
-    def eject(self):
+    def eject(self, force=False):
         """Eject disc if it hasn't previously been ejected
+
+        Parameters
+        ----------
+        force: bool
+            When True, eject regardless of the AUTO_EJECT config. Used for
+            failed/abandoned rips so a bad disc never stays stuck in a closed
+            tray. A successful rip leaves force False and still obeys AUTO_EJECT.
         """
         if self.ejected:
             logging.debug("The drive associated with this job has already been ejected.")
@@ -335,7 +342,7 @@ class Job(db.Model):
         if self.drive is None:
             logging.warning("No drive was backpopulated with this job!")
             return
-        if not cfg.arm_config['AUTO_EJECT']:
+        if not cfg.arm_config['AUTO_EJECT'] and not force:
             logging.info("Skipping auto eject")
             self.drive.release_current_job()  # release job without ejecting
             return

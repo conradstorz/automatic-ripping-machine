@@ -268,7 +268,10 @@ if __name__ == "__main__":
         job.status = JobState.SUCCESS.value
     finally:
         if job:
-            job.eject()  # each job stores its eject status, so it is safe to call.
+            # each job stores its eject status, so it is safe to call.
+            # A failed rip force-ejects so the bad disc never stays stuck in a
+            # closed tray; a success still obeys AUTO_EJECT.
+            job.eject(force=(job.status == JobState.FAILURE.value))
             job.stop_time = datetime.datetime.now()
             job_length = job.stop_time - job.start_time if job.start_time else 0
             minutes, seconds = divmod(job_length.seconds + job_length.days * 86400, 60)

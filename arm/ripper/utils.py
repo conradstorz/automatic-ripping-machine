@@ -761,6 +761,11 @@ def clean_old_jobs():
             job.status = JobState.FAILURE.value
             db.session.commit()
             database_updater({'status': JobState.FAILURE.value}, job)
+            # Eject the orphaned disc so it does not sit in a closed tray. This
+            # is a no-op for a drive whose current job has since been reassigned
+            # (job.drive is None then), so it only frees genuinely stuck discs.
+            job.eject(force=True)
+            db.session.commit()
 
 
 def check_ip():
