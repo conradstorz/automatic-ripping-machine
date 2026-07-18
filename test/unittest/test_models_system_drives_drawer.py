@@ -10,6 +10,7 @@ import unittest
 
 sys.path.insert(0, '/opt/arm')
 from arm.models.system_drives import SystemDrives, CDS   # noqa: E402
+from arm.models.job import Job   # noqa: E402
 
 
 def make_bare_drive():
@@ -55,6 +56,45 @@ class TestDrawerStatus(unittest.TestCase):
     def test_stale_drive_reports_unavailable(self):
         # even with an otherwise readable tray value, a stale drive is unavailable
         self.assertEqual(self._drive(CDS.DISC_OK.value, stale=True).drawer_status, "Unavailable")
+
+
+class TestStatusLabel(unittest.TestCase):
+    """SystemDrives.status_label -> chip label: Ripping/Idle/Open/Unavailable.
+
+    Mirrors the drive-icon precedence: Unavailable > Open > Ripping > Idle.
+    """
+
+    def _drive(self, tray_value, stale=False, ripping=False):
+        drive = make_bare_drive()
+        drive.stale = stale
+        drive.tray = tray_value
+        # setting the relationship drives the .processing property
+        drive.job_current = Job._sa_class_manager.new_instance() if ripping else None
+        return drive
+
+    def test_closed_with_job_is_ripping(self):
+        self.assertEqual(self._drive(CDS.DISC_OK.value, ripping=True).status_label, "Ripping")
+
+    def test_closed_no_job_is_idle(self):
+        self.assertEqual(self._drive(CDS.DISC_OK.value).status_label, "Idle")
+
+    def test_empty_closed_is_idle(self):
+        self.assertEqual(self._drive(CDS.NO_DISC.value).status_label, "Idle")
+
+    def test_open_is_open(self):
+        self.assertEqual(self._drive(CDS.TRAY_OPEN.value).status_label, "Open")
+
+    def test_error_is_unavailable(self):
+        self.assertEqual(self._drive(None).status_label, "Unavailable")
+
+    def test_stale_is_unavailable(self):
+        self.assertEqual(self._drive(CDS.DISC_OK.value, stale=True).status_label, "Unavailable")
+
+    def test_unavailable_beats_ripping(self):
+        # a stale drive with a lingering job still reads Unavailable (can't trust it)
+        self.assertEqual(
+            self._drive(CDS.DISC_OK.value, stale=True, ripping=True).status_label,
+            "Unavailable")
 
 
 if __name__ == '__main__':

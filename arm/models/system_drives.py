@@ -219,6 +219,22 @@ class SystemDrives(db.Model):  # pylint: disable=too-many-instance-attributes
             return "Open"
         return "Closed"
 
+    @property
+    def status_label(self):
+        """One-word operational state for the drive chip in the UI overview.
+
+        Precedence mirrors the drive icon: an unreadable/stale drive is
+        'Unavailable', an out tray is 'Open', a drive with an active job is
+        'Ripping', and anything else (closed, no job) is 'Idle'.
+        """
+        if self.stale or self.tray == CDS.ERROR:
+            return "Unavailable"
+        if self.open:
+            return "Open"
+        if self.processing:
+            return "Ripping"
+        return "Idle"
+
     def eject(self, method="eject"):
         """Open or close the drive
 

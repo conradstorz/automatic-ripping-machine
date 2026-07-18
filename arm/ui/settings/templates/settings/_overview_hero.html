@@ -1,0 +1,28 @@
+{# Now-Ripping hero for the ARM Status overview.
+
+   Server-renders the active jobs (drives with a current job) so there is no
+   blank flash and it degrades gracefully without JS; overviewRefresh.js then
+   polls /json?mode=joblist and replaces #nowRipping with live progress + ETA. #}
+<div class="ars-hero">
+    <div class="ars-hero-bar">Now Ripping</div>
+    <div id="nowRipping" class="ars-hero-body">
+        {% set active = drives | selectattr('job_current') | list %}
+        {% if active %}
+            {% for drive in active %}
+                <div class="ars-hero-row">
+                    <div class="ars-hero-head">
+                        <span class="ars-hero-dev">{{ drive.mount }}</span>
+                        <a class="ars-hero-name" href="jobdetail?job_id={{ drive.job_current.job_id }}">
+                            {{ drive.job_current.title or drive.job_current.label or 'Unknown' }}</a>
+                        <span class="ars-hero-meta">
+                            {{ drive.job_current.video_type }}{% if drive.job_current.year %} ({{ drive.job_current.year }}){% endif %}</span>
+                    </div>
+                    <div class="ars-hero-progress"><div class="ars-hero-fill" style="width:0%"></div></div>
+                    <div class="ars-hero-sub">updating&hellip;</div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="ars-hero-empty">All drives idle &mdash; no active rips.</div>
+        {% endif %}
+    </div>
+</div>

@@ -1,0 +1,45 @@
+{# Compact server/rip-stats strip for the ARM Status overview (General Info tab). #}
+<div class="ars-stats">
+    <div class="ars-stat">
+        <div class="ars-stat-label">ARM</div>
+        <div class="ars-stat-value">
+            {{ stats['arm_version_local'] }}
+            {% if not stats['updated'] %}
+                <a class="ars-pill ars-pill-warn"
+                   href="https://github.com/automatic-ripping-machine/automatic-ripping-machine/wiki/Docker-Upgrading"
+                   target="_blank" rel="noopener"
+                   title="Update available: {{ stats['arm_version_remote'] }}">update</a>
+            {% endif %}
+        </div>
+    </div>
+    <div class="ars-stat">
+        <div class="ars-stat-label">Server time</div>
+        <div class="ars-stat-value ars-stat-sm">{{ stats['server_datetime'] }}<br>{{ stats['server_timezone'] }}</div>
+    </div>
+    <div class="ars-stat">
+        <div class="ars-stat-label">Total rips</div>
+        <div class="ars-stat-value">{{ stats['total_rips'] }}</div>
+    </div>
+    <div class="ars-stat">
+        <div class="ars-stat-label">Movies</div>
+        <div class="ars-stat-value">{{ stats['movies_ripped'] }}</div>
+    </div>
+    <div class="ars-stat">
+        <div class="ars-stat-label">Series</div>
+        <div class="ars-stat-value">{{ stats['series_ripped'] }}</div>
+    </div>
+    <div class="ars-stat">
+        <div class="ars-stat-label">Audio</div>
+        <div class="ars-stat-value">{{ stats['cds_ripped'] }}</div>
+    </div>
+    <div class="ars-stat">
+        <div class="ars-stat-label">Failed</div>
+        <div class="ars-stat-value {% if stats['no_failed_jobs'] %}ars-stat-bad{% endif %}">{{ stats['no_failed_jobs'] }}</div>
+    </div>
+    <div class="ars-stat ars-stat-grow">
+        <div class="ars-stat-label">Runtime</div>
+        <div class="ars-stat-value ars-stat-sm">
+            Python {{ stats['python_version'] }} &middot; git <code>{{ stats['git_commit'][:7] if stats['git_commit'] else '' }}</code>
+        </div>
+    </div>
+</div>
