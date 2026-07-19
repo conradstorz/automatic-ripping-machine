@@ -50,7 +50,25 @@
                         </div>
                     </div>
                     <br>
-                    {% with pages=pages, page_name="route_history.history" %}
+                    <form method="get" action="{{ url_for('route_history.history') }}"
+                          class="form-inline justify-content-center mb-3">
+                        <label class="mr-2" for="status">Show</label>
+                        <select name="status" id="status" class="form-control mr-3">
+                            <option value="all"{% if status == 'all' %} selected{% endif %}>All</option>
+                            <option value="success"{% if status == 'success' %} selected{% endif %}>Successful</option>
+                            <option value="fail"{% if status == 'fail' %} selected{% endif %}>Failed</option>
+                            <option value="active"{% if status == 'active' %} selected{% endif %}>In-progress</option>
+                        </select>
+                        <label class="mr-2" for="from">From</label>
+                        <input type="date" name="from" id="from" class="form-control mr-3"
+                               value="{{ date_from }}">
+                        <label class="mr-2" for="to">To</label>
+                        <input type="date" name="to" id="to" class="form-control mr-3"
+                               value="{{ date_to }}">
+                        <button type="submit" class="btn btn-primary mr-2">Apply</button>
+                        <a href="{{ url_for('route_history.history') }}" class="btn btn-secondary">Clear</a>
+                    </form>
+                    {% with pages=pages, page_name="route_history.history", page_args=page_args %}
                         {% include "pagination.html" %}
                     {% endwith %}
                     <!-- Main Body -->
@@ -85,7 +103,7 @@
                             </tbody>
                         </table>
                     </div>
-                    {% with pages=pages, page_name="route_history.history" %}
+                    {% with pages=pages, page_name="route_history.history", page_args=page_args %}
                         {% include "pagination.html" %}
                     {% endwith %}
                 </div>
