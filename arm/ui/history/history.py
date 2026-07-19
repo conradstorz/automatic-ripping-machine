@@ -5,12 +5,14 @@ Covers
 """
 
 import os
+from datetime import timedelta
 from flask_login import LoginManager, login_required  # noqa: F401
 from flask import render_template, request, Blueprint, session
 
 import arm.ui.utils as ui_utils
 from arm.ui import app, db
 from arm.models.job import Job
+from arm.ui.history.filters import normalize_status, parse_date, build_page_args
 import arm.config.config as cfg
 
 route_history = Blueprint('route_history', __name__,
@@ -31,13 +33,27 @@ def history():
     # regenerate the armui_cfg we don't want old settings
     armui_cfg = ui_utils.arm_db_cfg()
     page = request.args.get('page', 1, type=int)
+
+    status = normalize_status(request.args.get('status', 'all'))
+    date_from = parse_date(request.args.get('from'))
+    date_to = parse_date(request.args.get('to'))
+    from_str = date_from.strftime("%Y-%m-%d") if date_from else ""
+    to_str = date_to.strftime("%Y-%m-%d") if date_to else ""
+
     if os.path.isfile(cfg.arm_config['DBFILE']):
-        # after roughly 175 entries firefox readermode will break
-        # jobs = Job.query.filter_by().limit(175).all()
-        jobs = Job.query.order_by(db.desc(Job.job_id)).paginate(page=page,
-                                                                max_per_page=int(
-                                                                    armui_cfg.database_limit),
-                                                                error_out=False)
+        query = Job.query
+        if status == "success":
+            query = query.filter(Job.status == "success")
+        elif status == "fail":
+            query = query.filter(Job.status == "fail")
+        elif status == "active":
+            query = query.filter(~Job.finished)
+        if date_from is not None:
+            query = query.filter(Job.start_time >= date_from)
+        if date_to is not None:
+            query = query.filter(Job.start_time < date_to + timedelta(days=1))
+        jobs = query.order_by(db.desc(Job.job_id)).paginate(
+            page=page, max_per_page=int(armui_cfg.database_limit), error_out=False)
     else:
         app.logger.error('ERROR: /history database file doesnt exist')
         jobs = {}
@@ -46,4 +62,6 @@ def history():
     session["page_title"] = "History"
 
     return render_template('history.html', jobs=jobs.items,
-                           date_format=cfg.arm_config['DATE_FORMAT'], pages=jobs)
+                           date_format=cfg.arm_config['DATE_FORMAT'], pages=jobs,
+                           status=status, date_from=from_str, date_to=to_str,
+                           page_args=build_page_args(status, from_str, to_str))
