@@ -68,9 +68,14 @@
                         <button type="submit" class="btn btn-primary mr-2">Apply</button>
                         <a href="{{ url_for('route_history.history') }}" class="btn btn-secondary">Clear</a>
                     </form>
+                    {% if db_missing %}
+                    <div class="alert alert-warning text-center">No database found &mdash; no jobs to show.</div>
+                    {% endif %}
+                    {% if pages %}
                     {% with pages=pages, page_name="route_history.history", page_args=page_args %}
                         {% include "pagination.html" %}
                     {% endwith %}
+                    {% endif %}
                     <!-- Main Body -->
                     <div class="row">
                         <table class="table table-striped">
@@ -103,9 +108,11 @@
                             </tbody>
                         </table>
                     </div>
+                    {% if pages %}
                     {% with pages=pages, page_name="route_history.history", page_args=page_args %}
                         {% include "pagination.html" %}
                     {% endwith %}
+                    {% endif %}
                 </div>
             </div>
         </div>

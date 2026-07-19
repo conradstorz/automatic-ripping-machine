@@ -49,14 +49,19 @@ def view_database():
                                                                 max_per_page=int(
                                                                     armui_cfg.database_limit),
                                                                 error_out=False)
+        job_items = jobs.items
+        db_missing = False
     else:
         app.logger.error('ERROR: /database no database, file doesnt exist')
-        jobs = {}
+        jobs = None
+        job_items = []
+        db_missing = True
 
     session["page_title"] = "Database"
 
     return render_template('databaseview.html',
-                           jobs=jobs.items, pages=jobs,
+                           jobs=job_items, pages=jobs,
+                           db_missing=db_missing,
                            date_format=cfg.arm_config['DATE_FORMAT'])
 
 

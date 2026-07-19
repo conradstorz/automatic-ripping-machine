@@ -83,9 +83,14 @@
             </div>
         </div>
 
+        {% if db_missing %}
+        <div class="alert alert-warning text-center">No database found &mdash; no jobs to show.</div>
+        {% endif %}
+        {% if pages %}
         {% with pages=pages, page_name="route_database.view_database" %}
             {% include "pagination.html" %}
         {% endwith %}
+        {% endif %}
         <!-- All jobs -->
         <div class="row">
             <div class="col-md-12 mx-auto">
@@ -197,9 +202,11 @@
             </div>
         </div>
 
+        {% if pages %}
         {% with pages=pages, page_name="route_database.view_database" %}
             {% include "pagination.html" %}
         {% endwith %}
+        {% endif %}
 
     </div>
 

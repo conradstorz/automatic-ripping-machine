@@ -54,14 +54,19 @@ def history():
             query = query.filter(Job.start_time < date_to + timedelta(days=1))
         jobs = query.order_by(db.desc(Job.job_id)).paginate(
             page=page, max_per_page=int(armui_cfg.database_limit), error_out=False)
+        job_items = jobs.items
+        db_missing = False
     else:
         app.logger.error('ERROR: /history database file doesnt exist')
-        jobs = {}
+        jobs = None
+        job_items = []
+        db_missing = True
     app.logger.debug(f"Date format - {cfg.arm_config['DATE_FORMAT']}")
 
     session["page_title"] = "History"
 
-    return render_template('history.html', jobs=jobs.items,
+    return render_template('history.html', jobs=job_items,
                            date_format=cfg.arm_config['DATE_FORMAT'], pages=jobs,
+                           db_missing=db_missing,
                            status=status, date_from=from_str, date_to=to_str,
                            page_args=build_page_args(status, from_str, to_str))
