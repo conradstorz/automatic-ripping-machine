@@ -18,10 +18,26 @@ MAKEMKV_SERIAL="$1"
 
 # Use beta key if serial is not passed
 if [ -z "$MAKEMKV_SERIAL" ]; then
-    if ! MAKEMKV_SERIAL=$(curl -fsSL "$MAKEMKV_SERIAL_URL" | grep -oP 'T-[\w\d@]{66}'); then
-		echo "The beta key cannot be found at: $MAKEMKV_SERIAL_URL"
-		exit $EXIT_CODE_URL_ERROR
-	fi
+    # The forum is briefly unreachable at times and rate-limits bursts of
+    # requests (e.g. several drives ripping at once), which would otherwise fail
+    # an otherwise-good rip. Bound each attempt with a timeout and retry a few
+    # times with linear backoff before giving up.
+    MAKEMKV_KEY_MAX_TRIES="${MAKEMKV_KEY_MAX_TRIES:-4}"
+    attempt=1
+    while true; do
+        if MAKEMKV_SERIAL=$(curl -fsSL --connect-timeout 15 --max-time 45 \
+                "$MAKEMKV_SERIAL_URL" | grep -oP 'T-[\w\d@]{66}'); then
+            break
+        fi
+        if [ "$attempt" -ge "$MAKEMKV_KEY_MAX_TRIES" ]; then
+            echo "The beta key cannot be found at: $MAKEMKV_SERIAL_URL (after $attempt attempts)"
+            exit $EXIT_CODE_URL_ERROR
+        fi
+        backoff=$((attempt * 5))
+        echo "Attempt $attempt to fetch the beta key failed; retrying in ${backoff}s..."
+        sleep "$backoff"
+        attempt=$((attempt + 1))
+    done
     echo "MakeMKV beta key for this month: $MAKEMKV_SERIAL"
 fi
 
