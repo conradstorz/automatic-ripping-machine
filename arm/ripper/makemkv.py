@@ -606,7 +606,9 @@ def makemkv_info(job, select=None, index=9999, options=None):
     job.status = JobState.VIDEO_INFO.value
     db.session.commit()
     try:
-        yield from run(info_options, select)
+        # Info scan streams disc structure to stdout, so stdout is the heartbeat.
+        yield from run(info_options, select,
+                       inactivity=utils.config_int('MAKEMKV_MAX_INACTIVITY_SECS', 300))
     finally:
         logging.info("MakeMKV info exits.")
         job.status = JobState.VIDEO_WAITING.value
@@ -654,7 +656,11 @@ def makemkv_backup(job, rawpath):
         rawpath,
     ]
     logging.info("Backing up disc")
-    collections.deque(run(cmd, OutputType.MSG), maxlen=0)
+    # Rip progress heartbeat goes to the --progress file, not stdout, so an
+    # update to that file counts as a sign of life for the watchdog.
+    collections.deque(run(cmd, OutputType.MSG,
+                          inactivity=utils.config_int('MAKEMKV_MAX_INACTIVITY_SECS', 300),
+                          progress_file=progress_log(job)), maxlen=0)
 
 
 def makemkv_mkv(job, rawpath):
@@ -708,7 +714,10 @@ def makemkv_mkv(job, rawpath):
             f"--minlength={job.config.MINLENGTH}",
         ]
         logging.info("Process all tracks from disc.")
-        collections.deque(run(cmd, OutputType.MSG), maxlen=0)
+        # Rip progress heartbeat goes to the --progress file, not stdout.
+        collections.deque(run(cmd, OutputType.MSG,
+                              inactivity=utils.config_int('MAKEMKV_MAX_INACTIVITY_SECS', 300),
+                              progress_file=progress_log(job)), maxlen=0)
     else:
         process_single_tracks(job, rawpath, 'auto')
 
@@ -789,7 +798,10 @@ def rip_mainfeature(job, track, rawpath):
     ]
     logging.info("Ripping main feature")
     # Possibly update db to say track was ripped
-    collections.deque(run(cmd, OutputType.MSG), maxlen=0)
+    # Rip progress heartbeat goes to the --progress file, not stdout.
+    collections.deque(run(cmd, OutputType.MSG,
+                          inactivity=utils.config_int('MAKEMKV_MAX_INACTIVITY_SECS', 300),
+                          progress_file=progress_log(job)), maxlen=0)
 
 
 def process_single_tracks(job, rawpath, mode: str):
@@ -855,7 +867,10 @@ def process_single_tracks(job, rawpath, mode: str):
                 f.write(f"\nBINF:{int(time())},{process_index},{len(tracks_to_process)},0000")
 
         logging.debug("Starting to rip single track.")
-        collections.deque(run(cmd, OutputType.MSG), maxlen=0)
+        # Rip progress heartbeat goes to the --progress file, not stdout.
+        collections.deque(run(cmd, OutputType.MSG,
+                              inactivity=utils.config_int('MAKEMKV_MAX_INACTIVITY_SECS', 300),
+                              progress_file=logfile_base), maxlen=0)
         process_index += 1
 
 
@@ -1178,49 +1193,42 @@ class MakeMKVOutputChecker:
         return self.data
 
 
-class MakeMkvInactivityError(Exception):
-    """Raised when makemkvcon produces no output for the inactivity window."""
+_STDOUT_SENTINEL = object()
+_WATCHDOG_POLL_SECS = 5
 
 
-def iter_lines_with_timeout(stream, timeout):
+def _drain_stdout(stream, line_queue):
+    """Reader-thread body: push each line onto the queue, then a sentinel.
+
+    A daemon thread does the blocking reads so run() can enforce a deadline:
+    makemkvcon can wedge at 100% CPU emitting nothing, and a plain
+    ``for line in stream`` would then block the ripper forever.
     """
-    Yield lines from a text stream, raising MakeMkvInactivityError if no line
-    arrives within `timeout` seconds.
+    try:
+        for line in stream:
+            line_queue.put(line)
+    finally:
+        line_queue.put(_STDOUT_SENTINEL)
 
-    A daemon thread does the blocking reads so the caller can enforce the
-    deadline: makemkvcon can wedge at 100% CPU emitting nothing, and a plain
-    ``for line in stream`` would then block forever. The timer starts now
-    (covers a child that hangs before its first line) and resets on each line
-    (a rip that keeps emitting progress is never tripped).
 
-    Parameters:
-        stream: a text file-like object (e.g. proc.stdout)
-        timeout (float): max seconds to wait for the next line
-    Yields:
-        str: each line, including its trailing newline
-    Raises:
-        MakeMkvInactivityError: when the stream is silent for `timeout` seconds
+def _heartbeat_idle(last_output, progress_file, now):
     """
-    line_queue = queue.Queue()
-    sentinel = object()
+    Seconds since the most recent sign of life from makemkvcon.
 
-    def _reader():
+    During an *info* scan the heartbeat is stdout (makemkvcon streams the disc
+    structure there). During a *rip* the frequent PRGV/PRGC progress heartbeat
+    is redirected to the ``--progress`` file, leaving stdout quiet for a whole
+    title, so the file's mtime is the real heartbeat. Whichever source is
+    fresher wins, so a healthy long rip is never judged idle just because
+    stdout is silent.
+    """
+    idle = now - last_output
+    if progress_file:
         try:
-            for line in stream:
-                line_queue.put(line)
-        finally:
-            line_queue.put(sentinel)
-
-    reader = threading.Thread(target=_reader, daemon=True)
-    reader.start()
-    while True:
-        try:
-            item = line_queue.get(timeout=timeout)
-        except queue.Empty:
-            raise MakeMkvInactivityError(timeout)
-        if item is sentinel:
-            return
-        yield item
+            idle = min(idle, now - os.path.getmtime(progress_file))
+        except OSError:
+            pass
+    return idle
 
 
 def kill_process_tree(pid):
@@ -1253,22 +1261,52 @@ def kill_process_tree(pid):
             pass
 
 
-def run(options, select):
+def _parse_stdout_line(line, select, buffer, returncode):
+    """
+    Process one makemkvcon stdout line. Post-error or unparseable lines are
+    appended to `buffer`; otherwise the line is parsed and, if its type is
+    selected, the data object is returned to be yielded. Returns None when
+    there is nothing to yield.
+    """
+    if returncode:
+        buffer.append(line)
+        return None
+    try:
+        msg_type, data = parse_line(line)
+    except MakeMkvParserError as err:
+        logging.warning(err)
+        buffer.append(line)
+        return None
+    logging.debug(data)
+    if msg_type in select:
+        return data
+    return None
+
+
+def run(options, select, inactivity=None, progress_file=None):
     """
     Run makemkv with input cli options and yield selected messages
 
     Parameters:
         options (list): makemkvcon cli options
         select (OutputType): output Message Type(s)
+        inactivity (int|None): if positive, kill makemkvcon and raise when it
+            shows no sign of life for this many seconds. <=0 or None disables
+            the watchdog (blocks indefinitely, the historical behavior).
+        progress_file (str|None): the ``--progress`` file for a rip. When set,
+            an update to it counts as a heartbeat, so a rip whose progress is
+            written to that file (not stdout) is not falsely judged hung.
     Yields:
         dataclasses of selected type
     Raises:
-        MakeMkvRuntimeError on makemkvcon exit code
+        MakeMkvRuntimeError on makemkvcon exit code or an inactivity kill
     """
     if not isinstance(options, (tuple, list)):
         raise TypeError(options)
     if not isinstance(select, OutputType):
         raise TypeError(select)
+    if inactivity is not None and inactivity <= 0:
+        inactivity = None  # disabled
     # Check makemkvcon path, resolves baremetal unique install issues
     makemkvcon_path = shutil.which("makemkvcon")
     # robot process of makemkvcon with
@@ -1279,36 +1317,38 @@ def run(options, select):
     ]
     cmd += list(options)
     buffer = []
-    inactivity = int(cfg.arm_config.get('MAKEMKV_MAX_INACTIVITY_SECS', 300))
-    # 0 or negative disables the watchdog: block indefinitely like the old behavior.
-    inactivity = inactivity if inactivity > 0 else None
     logging.debug(f"command: '{' '.join(cmd)}'")
     # stdin=DEVNULL so a prompting makemkvcon can never block waiting on input.
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL,
                           text=True) as proc:
         logging.debug(f"PID {proc.pid}: command: '{' '.join(cmd)}'")
+        line_queue = queue.Queue()
+        reader = threading.Thread(target=_drain_stdout, args=(proc.stdout, line_queue),
+                                  daemon=True)
+        reader.start()
+        last_output = time()
         try:
-            for line in iter_lines_with_timeout(proc.stdout, inactivity):
-                line = line.rstrip(os.linesep)
-                logging.debug(line)  # Maybe write the raw output to a separate log
-                if proc.returncode:
-                    buffer.append(line)
-                    continue
+            while True:
+                poll = min(inactivity, _WATCHDOG_POLL_SECS) if inactivity else None
                 try:
-                    msg_type, data = parse_line(line)
-                except MakeMkvParserError as err:
-                    logging.warning(err)
-                    buffer.append(line)
-                    continue
-                logging.debug(data)
-                if msg_type in select:
-                    yield data
-        except MakeMkvInactivityError:
-            logging.error(f"makemkvcon (PID {proc.pid}) produced no output for "
-                          f"{inactivity}s; assuming it is hung. Killing it.")
-            kill_process_tree(proc.pid)
-            raise MakeMkvRuntimeError(-1, cmd,
-                                      output=f"makemkvcon hung: no output for {inactivity}s")
+                    item = line_queue.get(timeout=poll)
+                except queue.Empty:
+                    item = None
+                if item is _STDOUT_SENTINEL:
+                    break
+                if item is not None:
+                    last_output = time()
+                    line = item.rstrip(os.linesep)
+                    logging.debug(line)  # Maybe write the raw output to a separate log
+                    data = _parse_stdout_line(line, select, buffer, proc.returncode)
+                    if data is not None:
+                        yield data
+                if inactivity and _heartbeat_idle(last_output, progress_file, time()) >= inactivity:
+                    logging.error(f"makemkvcon (PID {proc.pid}) showed no activity for "
+                                  f"{inactivity}s; assuming it is hung. Killing it.")
+                    kill_process_tree(proc.pid)
+                    raise MakeMkvRuntimeError(
+                        -1, cmd, output=f"makemkvcon hung: no activity for {inactivity}s")
         finally:
             # Never let Popen.__exit__'s wait() block on a still-running child,
             # and reap the tree if the consumer closed us early (GeneratorExit).

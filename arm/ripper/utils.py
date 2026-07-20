@@ -121,6 +121,19 @@ def notify_entry(job):
         raise RipperException("Could not determine disc type")
 
 
+def config_int(key, default):
+    """
+    Read an integer config value, falling back to `default` if the key is
+    missing, null, empty, or non-numeric (so a stray ``KEY:`` in arm.yaml can
+    never crash a rip or the watchdog).
+    """
+    try:
+        return int(cfg.arm_config.get(key, default))
+    except (TypeError, ValueError):
+        logging.warning(f"Config {key} is not an integer; using default {default}.")
+        return default
+
+
 def sleep_check_process(process_str, max_processes, sleep=(20, 120, 10)):
     """
     New function to check for max_transcode from job.config and force obey limits\n
@@ -138,7 +151,7 @@ def sleep_check_process(process_str, max_processes, sleep=(20, 120, 10)):
     loop_count = max_processes + 1
     # Cap the total wait so a lingering (e.g. hung) process whose count never
     # drops can't make this loop spin forever.
-    max_wait = int(cfg.arm_config.get('MAKEMKV_CONCURRENT_WAIT_MAX_SECS', 3600))
+    max_wait = config_int('MAKEMKV_CONCURRENT_WAIT_MAX_SECS', 3600)
     waited = 0
     logging.info(f"Starting sleep check of {process_str}")
     while loop_count >= max_processes:

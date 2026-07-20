@@ -54,6 +54,28 @@ class TestSleepCheckProcessBounded(unittest.TestCase):
         self.assertFalse(utils.sleep_check_process('makemkvcon', 0))
 
 
+class TestConfigInt(unittest.TestCase):
+
+    def test_valid_int(self):
+        cfg.arm_config['X_TEST_INT'] = "42"
+        try:
+            self.assertEqual(utils.config_int('X_TEST_INT', 7), 42)
+        finally:
+            cfg.arm_config.pop('X_TEST_INT', None)
+
+    def test_missing_uses_default(self):
+        cfg.arm_config.pop('X_TEST_MISSING', None)
+        self.assertEqual(utils.config_int('X_TEST_MISSING', 300), 300)
+
+    def test_bad_value_uses_default(self):
+        for bad in (None, "", "abc", "  "):
+            cfg.arm_config['X_TEST_BAD'] = bad
+            try:
+                self.assertEqual(utils.config_int('X_TEST_BAD', 300), 300)
+            finally:
+                cfg.arm_config.pop('X_TEST_BAD', None)
+
+
 class TestReapOrphanMakemkv(unittest.TestCase):
 
     def test_kills_only_orphaned_makemkvcon(self):

@@ -36,13 +36,15 @@ def run_watchdog_once():
     is inserted (clean_old_jobs otherwise only runs at the start of a new job).
     """
     with app.app_context():
-        ripper_utils.clean_old_jobs()
+        # Reap orphaned makemkvcon first so a stuck child releases the drive
+        # before clean_old_jobs force-ejects the disc.
         ripper_utils.reap_orphan_makemkv()
+        ripper_utils.clean_old_jobs()
 
 
 def start_watchdog():
     """Start a daemon thread that runs run_watchdog_once() on an interval."""
-    interval = int(cfg.arm_config.get('JOB_WATCHDOG_INTERVAL_SECS', 300))
+    interval = ripper_utils.config_int('JOB_WATCHDOG_INTERVAL_SECS', 300)
 
     def _loop():
         while not shutdown_requested:
