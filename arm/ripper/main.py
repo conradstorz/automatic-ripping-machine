@@ -146,10 +146,14 @@ def main():
             utils.notify(job, constants.NOTIFY_TITLE, f"Data disc: {job.label} copying complete. ")
         else:
             logging.critical("Data rip failed.  See previous errors.  Exiting.")
+            job.status = JobState.FAILURE.value
+            db.session.commit()
 
     # Type: undefined
     else:
         logging.critical("Couldn't identify the disc type. Exiting without any action.")
+        job.status = JobState.FAILURE.value
+        db.session.commit()
 
 
 def setup():
@@ -254,6 +258,12 @@ if __name__ == "__main__":
                 f"ARM encountered a fatal error processing {job.title}. "
                 f"Check the logs for more details. {error}"
             )
+            # Only touch the job row if a job was actually created; a setup
+            # failure leaves job=None, and dereferencing it here would mask the
+            # real error with an AttributeError.
+            job.status = JobState.FAILURE.value
+            job.errors = str(error)
+            # Possibly add cleanup section here for failed job files
         else:
             utils.notify(
                 job,
@@ -261,11 +271,11 @@ if __name__ == "__main__":
                 f"ARM encountered a fatal error during job setup."
                 f"Check the logs for more details. {error}"
             )
-        job.status = JobState.FAILURE.value
-        job.errors = str(error)
-        # Possibly add cleanup section here for failed job files
     else:
-        job.status = JobState.SUCCESS.value
+        # Don't clobber a FAILURE that a rip branch already set (music/data/
+        # unknown fail while main() returns normally).
+        if job and job.status != JobState.FAILURE.value:
+            job.status = JobState.SUCCESS.value
     finally:
         if job:
             # each job stores its eject status, so it is safe to call.

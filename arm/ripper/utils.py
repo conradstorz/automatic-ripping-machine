@@ -382,7 +382,15 @@ def move_files_main(old_file, new_file, base_path):
         try:
             shutil.move(actual_old_file, new_file)
         except Exception as error:
+            # Raise instead of swallowing: the caller's post-processing deletes
+            # the raw files after moving, so a silent move failure would lose the
+            # ripped title. Failing here keeps raw and marks the job failed.
             logging.error(f"Unable to move '{actual_old_file}' to '{base_path}' - Error: {error}")
+            raise RipperException(
+                f"Failed to move '{actual_old_file}' to '{new_file}': {error}") from error
+        if not os.path.isfile(new_file):
+            raise RipperException(
+                f"Move of '{actual_old_file}' reported success but '{new_file}' is missing")
     else:
         logging.info(f"File: {new_file} already exists.  Not moving.")
 
@@ -754,16 +762,26 @@ def database_updater(args, job, wait_time=90):
         setattr(job, key, value)
         logging.debug(f"ID:{job.job_id} {key}={value}:{type(value)}")
 
+    committed = False
     for i in range(wait_time):  # give up after the users wait period in seconds
         try:
             db.session.commit()
+            committed = True
+            break
         except Exception as error:
             if "locked" in str(error):
                 time.sleep(1)
                 logging.debug(f"database is locked - try {i}/{wait_time}")
             else:
-                logging.debug(f"Error: {error}")
+                db.session.rollback()
+                logging.error(f"Error: {error}")
                 raise RuntimeError(str(error)) from error
+    if not committed:
+        # Never persisted (DB locked for the whole wait). Do NOT report success -
+        # a silent false success loses the job-state change entirely.
+        db.session.rollback()
+        logging.error(f"Database write failed: still locked after {wait_time}s. Changes rolled back.")
+        return False
     logging.debug("successfully written to the database")
     return True
 
@@ -775,19 +793,26 @@ def database_adder(obj_class):
     :param obj_class: Job/Config/Track/ etc
     :return: True if success
     """
+    committed = False
     for i in range(90):  # give up after the users wait period in seconds
         try:
             logging.debug(f"Trying to add {type(obj_class).__name__}")
             db.session.add(obj_class)
             db.session.commit()
+            committed = True
             break
         except Exception as error:
             if "locked" in str(error):
                 time.sleep(1)
                 logging.debug(f"database is locked - try {i}/90")
             else:
+                db.session.rollback()
                 logging.error(f"Error: {error}")
                 raise RuntimeError(str(error)) from error
+    if not committed:
+        db.session.rollback()
+        logging.error(f"Failed to add {type(obj_class).__name__}: DB locked after 90s. Rolled back.")
+        return False
     logging.debug(f"successfully written {type(obj_class).__name__} to the database")
     return True
 

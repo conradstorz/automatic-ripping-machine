@@ -49,9 +49,12 @@ def database_updater(args, job, wait_time=90):
     for (key, value) in args.items():
         setattr(job, key, value)
         app.logger.debug(f"Setting {key}: {value}")
+    committed = False
     for i in range(wait_time):  # give up after the users wait period in seconds
         try:
             db.session.commit()
+            committed = True
+            break
         except Exception as error:
             if "locked" in str(error):
                 sleep(1)
@@ -60,7 +63,11 @@ def database_updater(args, job, wait_time=90):
                 app.logger.debug("Error: " + str(error))
                 db.session.rollback()
                 raise RuntimeError(str(error)) from error
-
+    if not committed:
+        # Never persisted (DB locked for the whole wait); don't report false success.
+        db.session.rollback()
+        app.logger.error(f"Database write failed: still locked after {wait_time}s. Changes rolled back.")
+        return False
     app.logger.debug("successfully written to the database")
     return True
 
