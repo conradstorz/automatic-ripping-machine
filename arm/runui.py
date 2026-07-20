@@ -3,6 +3,8 @@
 import os
 import sys
 import signal
+import threading
+import time
 
 # set the PATH to /arm/arm, so we can handle imports properly
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -11,6 +13,7 @@ import arm.config.config as cfg  # noqa E402
 import arm.ui.routes  # noqa E402
 import arm.ui.settings.DriveUtils  # noqa E402
 import arm.ui.utils  # noqa E402
+import arm.ripper.utils as ripper_utils  # noqa E402
 
 from arm.ui import app  # noqa E402
 
@@ -23,6 +26,37 @@ def startup():
     if db_update["db_current"]:
         app.logger.info("Updating Optical Drives")
         arm.ui.settings.DriveUtils.drives_update(startup=True)
+
+
+def run_watchdog_once():
+    """
+    One watchdog sweep: fail + eject jobs whose ripper process is gone, and
+    kill orphaned makemkvcon processes reparented to init. Runs in the long-
+    lived UI process so a stuck/abandoned job is reaped even when no new disc
+    is inserted (clean_old_jobs otherwise only runs at the start of a new job).
+    """
+    with app.app_context():
+        ripper_utils.clean_old_jobs()
+        ripper_utils.reap_orphan_makemkv()
+
+
+def start_watchdog():
+    """Start a daemon thread that runs run_watchdog_once() on an interval."""
+    interval = int(cfg.arm_config.get('JOB_WATCHDOG_INTERVAL_SECS', 300))
+
+    def _loop():
+        while not shutdown_requested:
+            time.sleep(interval)
+            if shutdown_requested:
+                break
+            try:
+                run_watchdog_once()
+            except Exception as exc:  # never let the watchdog thread die
+                app.logger.error("Job watchdog error: %s", exc)
+
+    thread = threading.Thread(target=_loop, daemon=True, name="arm-job-watchdog")
+    thread.start()
+    app.logger.info("Job watchdog started (interval %ss).", interval)
 
 
 def handle_shutdown(signum, frame):
@@ -84,6 +118,9 @@ if __name__ == '__main__':
 
     # Run ARM Startup
     startup()
+
+    # Background watchdog: reap abandoned jobs / orphaned makemkvcon processes.
+    start_watchdog()
 
     from waitress import serve
 

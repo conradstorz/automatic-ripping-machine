@@ -217,6 +217,20 @@ RIPMETHOD_BR: "PLACEHOLDER"
 # MKV_ARGS: "--debug=-stdout"  # this will enable more detailed logging
 MKV_ARGS: ""
 
+# Watchdog: if makemkvcon produces no output for this many seconds it is assumed hung
+# (damaged/protected disc or a bad drive state) and its process tree is killed so the job
+# fails and ejects instead of pinning a drive at 100% CPU. A healthy scan/rip emits progress
+# constantly, so this only trips on a genuine stall. Set to 0 to disable (not recommended).
+MAKEMKV_MAX_INACTIVITY_SECS: 300
+
+# Safety cap (seconds) on how long ARM will wait for a free makemkvcon slot when
+# MAX_CONCURRENT_MAKEMKVINFO is set, so a lingering process can't stall a new job forever.
+MAKEMKV_CONCURRENT_WAIT_MAX_SECS: 3600
+
+# How often (seconds) the UI-side watchdog sweeps for abandoned jobs (whose ripper process
+# died) and orphaned makemkvcon processes, failing/ejecting and reaping them respectively.
+JOB_WATCHDOG_INTERVAL_SECS: 300
+
 # Remove any files created in the raw and transcode paths for the job after processing is complete
 DELRAWFILES: true
 

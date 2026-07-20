@@ -136,6 +136,10 @@ def sleep_check_process(process_str, max_processes, sleep=(20, 120, 10)):
     if not isinstance(sleep, tuple):
         raise TypeError(sleep)
     loop_count = max_processes + 1
+    # Cap the total wait so a lingering (e.g. hung) process whose count never
+    # drops can't make this loop spin forever.
+    max_wait = int(cfg.arm_config.get('MAKEMKV_CONCURRENT_WAIT_MAX_SECS', 3600))
+    waited = 0
     logging.info(f"Starting sleep check of {process_str}")
     while loop_count >= max_processes:
         # The process might disappear during loops, so we need to query the
@@ -146,12 +150,44 @@ def sleep_check_process(process_str, max_processes, sleep=(20, 120, 10)):
         )
         if max_processes > loop_count:
             break
+        if waited >= max_wait:
+            logging.warning(f"Waited {waited}s for a {process_str} slot to free "
+                            f"(still {loop_count} running); proceeding anyway.")
+            break
         # Try to make each check at different times
         random_time = random.randrange(*sleep)
         logging.debug(f"{loop_count} processes running. Sleeping for {random_time}s.")
         time.sleep(random_time)
+        waited += random_time
     logging.info(f"Exiting sleep check of {process_str}")
     return True
+
+
+def reap_orphan_makemkv():
+    """
+    Kill makemkvcon processes that have been reparented to init (ppid 1) -
+    i.e. genuinely orphaned after their ARM ripper parent died or was killed.
+
+    A makemkvcon with a live parent (ppid != 1) is an active rip and is never
+    touched, so this cannot interrupt a legitimately-long rip. Prevents a
+    crashed/abandoned rip from leaving a makemkvcon spinning at 100% CPU.
+
+    :return list: pids that were killed
+    """
+    killed = []
+    for proc in psutil.process_iter(['name', 'pid', 'ppid']):
+        try:
+            if proc.info.get('name') != 'makemkvcon':
+                continue
+            if proc.info.get('ppid') == 1:
+                pid = proc.info.get('pid')
+                logging.warning(f"Reaping orphaned makemkvcon PID {pid} "
+                                f"(reparented to init; ARM parent gone).")
+                proc.kill()
+                killed.append(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return killed
 
 
 def convert_job_type(video_type):
