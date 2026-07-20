@@ -140,6 +140,35 @@ class TestRunKillsHungMakemkvcon(unittest.TestCase):
         self.assertEqual(after - before, set(), "run() must reap the hung child")
 
 
+class TestRunWatchdogDisabled(unittest.TestCase):
+    """MAKEMKV_MAX_INACTIVITY_SECS <= 0 disables the watchdog (no false kill)."""
+
+    def setUp(self):
+        self._orig_which = makemkv.shutil.which
+        self._orig_inactivity = cfg.arm_config.get('MAKEMKV_MAX_INACTIVITY_SECS')
+        self._tmp = tempfile.mkdtemp()
+        self._fake = os.path.join(self._tmp, "makemkvcon")
+        # Silent for 2s (longer than a would-be 1s timeout), then exits cleanly.
+        with open(self._fake, "w") as fake:
+            fake.write("#!/bin/bash\nsleep 2\nexit 0\n")
+        os.chmod(self._fake, os.stat(self._fake).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        cfg.arm_config['MAKEMKV_MAX_INACTIVITY_SECS'] = 0
+        makemkv.shutil.which = lambda name: self._fake if name == "makemkvcon" else self._orig_which(name)
+
+    def tearDown(self):
+        makemkv.shutil.which = self._orig_which
+        if self._orig_inactivity is None:
+            cfg.arm_config.pop('MAKEMKV_MAX_INACTIVITY_SECS', None)
+        else:
+            cfg.arm_config['MAKEMKV_MAX_INACTIVITY_SECS'] = self._orig_inactivity
+
+    def test_disabled_does_not_trip_on_silence(self):
+        # With the watchdog on (1s) this silent process would be killed; disabled,
+        # run() must wait for its clean exit and not raise the inactivity error.
+        result = list(run(["info", "--cache=1", "disc:0"], OutputType.TINFO))
+        self.assertEqual(result, [])
+
+
 def _is_fake(proc, fake_path):
     try:
         return fake_path in " ".join(proc.cmdline())

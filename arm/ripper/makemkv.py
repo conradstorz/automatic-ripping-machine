@@ -1280,6 +1280,8 @@ def run(options, select):
     cmd += list(options)
     buffer = []
     inactivity = int(cfg.arm_config.get('MAKEMKV_MAX_INACTIVITY_SECS', 300))
+    # 0 or negative disables the watchdog: block indefinitely like the old behavior.
+    inactivity = inactivity if inactivity > 0 else None
     logging.debug(f"command: '{' '.join(cmd)}'")
     # stdin=DEVNULL so a prompting makemkvcon can never block waiting on input.
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL,
