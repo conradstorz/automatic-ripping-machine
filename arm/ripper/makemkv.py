@@ -13,10 +13,14 @@ import enum
 import itertools
 import logging
 import os
+import queue
 import shlex
 import shutil
 import subprocess
+import threading
 from time import sleep, time
+
+import psutil
 
 import arm.config.config as cfg
 from arm.models import SystemDrives, Track
@@ -1174,6 +1178,81 @@ class MakeMKVOutputChecker:
         return self.data
 
 
+class MakeMkvInactivityError(Exception):
+    """Raised when makemkvcon produces no output for the inactivity window."""
+
+
+def iter_lines_with_timeout(stream, timeout):
+    """
+    Yield lines from a text stream, raising MakeMkvInactivityError if no line
+    arrives within `timeout` seconds.
+
+    A daemon thread does the blocking reads so the caller can enforce the
+    deadline: makemkvcon can wedge at 100% CPU emitting nothing, and a plain
+    ``for line in stream`` would then block forever. The timer starts now
+    (covers a child that hangs before its first line) and resets on each line
+    (a rip that keeps emitting progress is never tripped).
+
+    Parameters:
+        stream: a text file-like object (e.g. proc.stdout)
+        timeout (float): max seconds to wait for the next line
+    Yields:
+        str: each line, including its trailing newline
+    Raises:
+        MakeMkvInactivityError: when the stream is silent for `timeout` seconds
+    """
+    line_queue = queue.Queue()
+    sentinel = object()
+
+    def _reader():
+        try:
+            for line in stream:
+                line_queue.put(line)
+        finally:
+            line_queue.put(sentinel)
+
+    reader = threading.Thread(target=_reader, daemon=True)
+    reader.start()
+    while True:
+        try:
+            item = line_queue.get(timeout=timeout)
+        except queue.Empty:
+            raise MakeMkvInactivityError(timeout)
+        if item is sentinel:
+            return
+        yield item
+
+
+def kill_process_tree(pid):
+    """
+    Best-effort SIGTERM then SIGKILL of a process and all its descendants.
+
+    Used to reap a wedged makemkvcon (and any children it spawned) so a hung
+    scan cannot keep spinning at 100% CPU. Safe to call for a pid that has
+    already exited.
+    """
+    try:
+        parent = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+    try:
+        procs = parent.children(recursive=True)
+    except psutil.NoSuchProcess:
+        procs = []
+    procs.append(parent)
+    for proc in procs:
+        try:
+            proc.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    _, alive = psutil.wait_procs(procs, timeout=5)
+    for proc in alive:
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            pass
+
+
 def run(options, select):
     """
     Run makemkv with input cli options and yield selected messages
@@ -1200,24 +1279,39 @@ def run(options, select):
     ]
     cmd += list(options)
     buffer = []
+    inactivity = int(cfg.arm_config.get('MAKEMKV_MAX_INACTIVITY_SECS', 300))
     logging.debug(f"command: '{' '.join(cmd)}'")
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True) as proc:
+    # stdin=DEVNULL so a prompting makemkvcon can never block waiting on input.
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                          text=True) as proc:
         logging.debug(f"PID {proc.pid}: command: '{' '.join(cmd)}'")
-        for line in proc.stdout:
-            line = line.rstrip(os.linesep)
-            logging.debug(line)  # Maybe write the raw output to a separate log
-            if proc.returncode:
-                buffer.append(line)
-                continue
-            try:
-                msg_type, data = parse_line(line)
-            except MakeMkvParserError as err:
-                logging.warning(err)
-                buffer.append(line)
-                continue
-            logging.debug(data)
-            if msg_type in select:
-                yield data
+        try:
+            for line in iter_lines_with_timeout(proc.stdout, inactivity):
+                line = line.rstrip(os.linesep)
+                logging.debug(line)  # Maybe write the raw output to a separate log
+                if proc.returncode:
+                    buffer.append(line)
+                    continue
+                try:
+                    msg_type, data = parse_line(line)
+                except MakeMkvParserError as err:
+                    logging.warning(err)
+                    buffer.append(line)
+                    continue
+                logging.debug(data)
+                if msg_type in select:
+                    yield data
+        except MakeMkvInactivityError:
+            logging.error(f"makemkvcon (PID {proc.pid}) produced no output for "
+                          f"{inactivity}s; assuming it is hung. Killing it.")
+            kill_process_tree(proc.pid)
+            raise MakeMkvRuntimeError(-1, cmd,
+                                      output=f"makemkvcon hung: no output for {inactivity}s")
+        finally:
+            # Never let Popen.__exit__'s wait() block on a still-running child,
+            # and reap the tree if the consumer closed us early (GeneratorExit).
+            if proc.poll() is None:
+                kill_process_tree(proc.pid)
     if proc.returncode:
         raise MakeMkvRuntimeError(proc.returncode, cmd, output=os.linesep.join(buffer))
     if buffer and proc.returncode:
