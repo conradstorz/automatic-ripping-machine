@@ -89,15 +89,16 @@ def check_db_version(install_path, db_file):
             flask_migrate.upgrade(mig_dir)
 
         if not os.path.isfile(db_file):
-            app.logger.debug("Can't create database file.  This could be a permissions issue.  Exiting...")
-        else:
-            # Only run the below if the db exists
-            # Check to see if db is at current revision
-            head_revision = script.get_current_head()
-            app.logger.debug("Alembic Head is: " + head_revision)
+            app.logger.error("Can't create database file.  This could be a permissions issue.  Exiting...")
+            return
 
-            conn = sqlite3.connect(db_file)
-            c = conn.cursor()
+        # Only run the below if the db exists
+        # Check to see if db is at current revision
+        head_revision = script.get_current_head()
+        app.logger.debug("Alembic Head is: " + head_revision)
+
+        conn = sqlite3.connect(db_file)
+        c = conn.cursor()
 
         c.execute('SELECT version_num FROM alembic_version')
         db_version = c.fetchone()[0]

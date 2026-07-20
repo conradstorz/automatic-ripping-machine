@@ -71,12 +71,36 @@ inside a Flask request context with the missing-DB state (`pages=None`, `db_miss
 `jobs=[]`) and assert each renders without raising and contains the notice text. This locks
 out the exact 500 regression. Runs in-container like the other `arm.ui` tests.
 
+## Root-cause addendum (discovered during implementation)
+
+Empirical testing revealed that the render-branch fix above, while correct, addresses a
+branch that is **normally unreachable**: both routes call `ui_utils.arm_db_cfg()` *before*
+the `os.path.isfile(DBFILE)` check, and `arm_db_cfg()` → `check_db_version()` attempts to
+create a missing DB. In normal operation the DB is created and the `isfile` check then
+passes, so the missing-DB render branch is not hit.
+
+The genuine 500 for a truly missing/uncreatable DB comes from `check_db_version()` in
+`arm/ui/utils.py`: when the DB file cannot be created it logged "Can't create database
+file" but then **fell through** to `c.execute(...)` with the sqlite cursor `c` never
+assigned (the `conn`/`c` assignments lived in the `else` branch), raising
+`UnboundLocalError: local variable 'c'`.
+
+Fix: in the can't-create branch, log at `error` level and `return` (honoring the existing
+"Exiting..." intent) instead of falling through. Everything after is then guaranteed to run
+only when the DB exists and `c` is bound. With this fix, a genuinely missing DB makes the
+routes reach the render branch and return HTTP 200 with the empty-state notice (base.html,
+history.html, and databaseview.html do not depend on `armui_cfg`, so `armui_cfg=None` is
+safe for these views).
+
 ## Files touched
 
 - `arm/ui/history/history.py` — safe missing-DB state.
 - `arm/ui/database/database.py` — safe missing-DB state.
 - `arm/ui/history/templates/history.html` — pagination guard + notice.
 - `arm/ui/database/templates/databaseview.html` — pagination guard + notice.
-- `test/unittest/test_ui_missing_db_render.py` — regression test.
+- `arm/ui/utils.py` — `check_db_version()` returns cleanly (no `UnboundLocalError`) when the
+  DB file cannot be created; log bumped to `error`.
+- `test/unittest/test_ui_missing_db_render.py` — template- and route-level regression tests.
+- `test/unittest/test_ui_check_db_version.py` — regression test for the `UnboundLocalError`.
 
 No config/model/migration changes.
