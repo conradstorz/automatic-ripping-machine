@@ -30,9 +30,13 @@ existing error path fail the job and eject the disc. Do not penalize legitimatel
 
 ## Approach (agreed)
 
-- **Timeout strategy:** inactivity watchdog — kill makemkvcon if it produces **no output** for
-  N seconds. Works for both the short `info` scan and the long actual rip (a healthy makemkv
-  emits progress every ~1s; a hung one goes silent — the incident emitted zero output).
+- **Timeout strategy:** inactivity watchdog — kill makemkvcon if it shows **no sign of life** for
+  N seconds. The heartbeat source differs by phase: the `info` scan streams disc structure to
+  **stdout** (stdout is its heartbeat), but a **rip** redirects its frequent progress heartbeat to
+  the `--progress` **file** (stdout goes near-silent for a whole title). So the watchdog judges
+  liveness by the **freshest of {last stdout line, `--progress` file mtime}** — otherwise a healthy
+  long rip whose stdout is quiet would be falsely killed. The production hang (info phase) emitted
+  zero output for 17-41 h, so the stdout heartbeat catches it.
 - **Scope:** core (inactivity timeout + kill-tree + `stdin=DEVNULL`) + bound `sleep_check_process`
   (D5) + a stuck-job watchdog (D3). Not a standalone Abandon change — the core already kills the
   child on the timeout path.
@@ -41,28 +45,31 @@ existing error path fail the job and eject the disc. Do not penalize legitimatel
 
 ### 1. Core — inactivity watchdog in `run()` (`arm/ripper/makemkv.py`)
 
-`run()` is a generator shared by the info scan and the actual rip, so the guard must be
-inactivity-based (not wall-clock).
+`run(options, select, inactivity=None, progress_file=None)` is a generator shared by the info scan
+and the actual rip.
 
-- **Reader thread + queue.** A helper `iter_lines_with_timeout(stream, timeout)` starts a daemon
-  thread that does `for line in stream: q.put(line)` then enqueues an EOF sentinel. The caller
-  does `q.get(timeout=timeout)`; each line resets the timer. On `queue.Empty` it raises an
-  internal `MakeMkvInactivityError`. The timer starts at spawn (covers the zero-output case) and
-  resets per line (long rips that keep emitting progress are never tripped).
-- **Spawn** with `stdin=subprocess.DEVNULL` (D6) in addition to the existing `stdout=PIPE, text=True`.
-- **On inactivity:** log an error, `kill_process_tree(proc.pid)` (SIGTERM children+parent, 5s grace,
-  then SIGKILL survivors — via psutil, mirroring `json_api.terminate_process`), and raise
-  `MakeMkvRuntimeError` so the existing caller path fails the job (and, via the existing
-  eject-on-failure work in `clean_old_jobs`/`main.py`, ejects the disc).
+- **Reader thread + queue.** A daemon thread (`_drain_stdout`) does `for line in stream: q.put(line)`
+  then enqueues an EOF sentinel. The main loop polls `q.get(timeout=min(inactivity, 5))`; each real
+  line refreshes `last_output`.
+- **Heartbeat.** On every wake it computes `_heartbeat_idle(last_output, progress_file, now)` = seconds
+  since the **freshest of {last stdout line, `--progress` file mtime}**. If that ≥ `inactivity`, the
+  child is judged hung. `makemkv_info` passes only `inactivity` (no progress file → stdout heartbeat);
+  the four rip callers pass `inactivity` + `progress_file=progress_log(job)` (file heartbeat).
+- **Spawn** with `stdin=subprocess.DEVNULL` (D6) plus the existing `stdout=PIPE, text=True`.
+- **On hang:** log an error, `kill_process_tree(proc.pid)` (SIGTERM children+parent, 5s grace, then
+  SIGKILL survivors — psutil), and raise `MakeMkvRuntimeError` so the existing caller path fails the
+  job (and, via the eject-on-failure work in `clean_old_jobs`/`main.py`, ejects the disc).
 - **Always clean up:** a `finally:` inside the `with subprocess.Popen(...)` block calls
-  `kill_process_tree` if the child is still alive, so `Popen.__exit__`'s `proc.wait()` can never
-  block on a hung child, and an early consumer close (GeneratorExit) also kills the child (no orphan).
-- **Config:** `MAKEMKV_MAX_INACTIVITY_SECS`, default **300**.
+  `kill_process_tree` if the child is still alive, so `Popen.__exit__`'s `proc.wait()` can never block
+  on a hung child, and an early consumer close (GeneratorExit) also kills the child (no orphan).
+- **Disable:** `inactivity <= 0` (or None) blocks indefinitely — the historical behavior.
+- **Config:** `MAKEMKV_MAX_INACTIVITY_SECS`, default **300**, read via `config_int` (safe coercion).
 
 New helpers (module-level, unit-testable in isolation):
-- `iter_lines_with_timeout(stream, timeout)` → generator of lines; raises `MakeMkvInactivityError`.
+- `_drain_stdout(stream, queue)` → reader-thread body.
+- `_heartbeat_idle(last_output, progress_file, now)` → seconds since the freshest heartbeat.
+- `_parse_stdout_line(line, select, buffer, returncode)` → per-line parse (keeps run() simple).
 - `kill_process_tree(pid)` → best-effort SIGTERM→SIGKILL of a process and its descendants.
-- `MakeMkvInactivityError(Exception)` — internal marker.
 
 ### 2. Bound `sleep_check_process` (D5) (`arm/ripper/utils.py`)
 
