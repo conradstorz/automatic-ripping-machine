@@ -603,17 +603,30 @@ def send_to_remote_db(job_id):
           f"&y={job.year}&imdb={job.imdb_id}" \
           f"&hnt={job.hasnicetitle}&l={job.label}&vt={job.video_type}"
     app.logger.debug(url.replace(api_key, "<api_key>"))
-    response = requests.get(url)
-    req = json.loads(response.text)
+    try:
+        http_timeout = int(cfg.arm_config.get('HTTP_TIMEOUT_SECS', 15))
+    except (TypeError, ValueError):
+        http_timeout = 15
+    try:
+        response = requests.get(url, timeout=http_timeout)
+        response.raise_for_status()
+        req = json.loads(response.text)
+    except (requests.exceptions.RequestException, ValueError) as remote_error:
+        # Timeout/connection/HTTP error, or a non-JSON body: fail gracefully
+        # instead of hanging the worker or 500-ing.
+        app.logger.error(f"Remote CRC db request failed: {remote_error}")
+        return_dict['error'] = str(remote_error)
+        return_dict['status'] = "fail"
+        return return_dict
     app.logger.debug("req= " + str(req))
     job_dict = job.get_d().items()
     return_dict['config'] = job.config.get_d()
     for key, value in iter(job_dict):
         return_dict[str(key)] = str(value)
-    if req['success']:
+    if req.get('success'):
         return_dict['status'] = "success"
     else:
-        return_dict['error'] = req['Error']
+        return_dict['error'] = req.get('Error')
         return_dict['status'] = "fail"
     return return_dict
 

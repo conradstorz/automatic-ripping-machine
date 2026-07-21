@@ -6,6 +6,7 @@ For help please visit https://github.com/automatic-ripping-machine/automatic-rip
 """
 import argparse  # noqa: E402
 import logging  # noqa: E402
+import socket  # noqa: E402
 import sys
 import time  # noqa: E402
 import datetime  # noqa: E402
@@ -239,6 +240,11 @@ def setup():
 
 
 if __name__ == "__main__":
+    # Bound every socket in the ripper process (per-disc, short-lived). This is
+    # the only way to time-limit musicbrainzngs, which does its own urllib HTTP
+    # with no per-call timeout, so a slow MusicBrainz server can't hang a rip.
+    socket.setdefaulttimeout(utils.config_int('HTTP_TIMEOUT_SECS', 15) or None)
+
     job = None
     try:
         setup()

@@ -419,12 +419,13 @@ def scan_emby():
         logging.info("Sending Emby library scan request")
         url = f"http://{cfg.arm_config['EMBY_SERVER']}:{cfg.arm_config['EMBY_PORT']}/Library/Refresh?api_key={cfg.arm_config['EMBY_API_KEY']}"  # noqa: E501
         try:
-            req = requests.post(url)
-            if req.status_code > 299:
-                req.raise_for_status()
+            req = requests.post(url, timeout=config_int('HTTP_TIMEOUT_SECS', 15))
+            req.raise_for_status()
             logging.info("Emby Library Scan request successful")
-        except requests.exceptions.HTTPError:
-            logging.error(f"Emby Library Scan request failed with status code: {req.status_code}")
+        except requests.exceptions.RequestException as emby_error:
+            # RequestException is the base class, so a timeout, connection error,
+            # or bad status is handled here instead of hanging or propagating.
+            logging.error(f"Emby Library Scan request failed: {emby_error}")
     else:
         logging.info("EMBY_REFRESH config parameter is false.  Skipping emby scan.")
 
