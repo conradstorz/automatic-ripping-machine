@@ -20,13 +20,18 @@ import subprocess
 import threading
 from time import sleep, time
 
-import psutil
-
 import arm.config.config as cfg
 from arm.models import SystemDrives, Track
 from arm.models.job import JobState
 from arm.ripper import utils
 from arm.ripper.utils import notify
+from arm.ripper.proc_watchdog import (
+    kill_process_tree,
+    heartbeat_idle as _heartbeat_idle,
+    _drain_stdout,
+    _STDOUT_SENTINEL,
+    WATCHDOG_POLL_SECS as _WATCHDOG_POLL_SECS,
+)
 from arm.ui import db
 
 MAKEMKV_INFO_WAIT_TIME = 60  # [s]
@@ -1193,72 +1198,10 @@ class MakeMKVOutputChecker:
         return self.data
 
 
-_STDOUT_SENTINEL = object()
-_WATCHDOG_POLL_SECS = 5
-
-
-def _drain_stdout(stream, line_queue):
-    """Reader-thread body: push each line onto the queue, then a sentinel.
-
-    A daemon thread does the blocking reads so run() can enforce a deadline:
-    makemkvcon can wedge at 100% CPU emitting nothing, and a plain
-    ``for line in stream`` would then block the ripper forever.
-    """
-    try:
-        for line in stream:
-            line_queue.put(line)
-    finally:
-        line_queue.put(_STDOUT_SENTINEL)
-
-
-def _heartbeat_idle(last_output, progress_file, now):
-    """
-    Seconds since the most recent sign of life from makemkvcon.
-
-    During an *info* scan the heartbeat is stdout (makemkvcon streams the disc
-    structure there). During a *rip* the frequent PRGV/PRGC progress heartbeat
-    is redirected to the ``--progress`` file, leaving stdout quiet for a whole
-    title, so the file's mtime is the real heartbeat. Whichever source is
-    fresher wins, so a healthy long rip is never judged idle just because
-    stdout is silent.
-    """
-    idle = now - last_output
-    if progress_file:
-        try:
-            idle = min(idle, now - os.path.getmtime(progress_file))
-        except OSError:
-            pass
-    return idle
-
-
-def kill_process_tree(pid):
-    """
-    Best-effort SIGTERM then SIGKILL of a process and all its descendants.
-
-    Used to reap a wedged makemkvcon (and any children it spawned) so a hung
-    scan cannot keep spinning at 100% CPU. Safe to call for a pid that has
-    already exited.
-    """
-    try:
-        parent = psutil.Process(pid)
-    except psutil.NoSuchProcess:
-        return
-    try:
-        procs = parent.children(recursive=True)
-    except psutil.NoSuchProcess:
-        procs = []
-    procs.append(parent)
-    for proc in procs:
-        try:
-            proc.terminate()
-        except psutil.NoSuchProcess:
-            pass
-    _, alive = psutil.wait_procs(procs, timeout=5)
-    for proc in alive:
-        try:
-            proc.kill()
-        except psutil.NoSuchProcess:
-            pass
+# The generic watchdog helpers (kill_process_tree, heartbeat_idle, _drain_stdout,
+# _STDOUT_SENTINEL, WATCHDOG_POLL_SECS) live in arm.ripper.proc_watchdog and are
+# imported at the top of this module; makemkv's run() keeps its own MakeMKV-specific
+# parsing but reuses them so the watchdog logic is defined once.
 
 
 def _parse_stdout_line(line, select, buffer, returncode):
