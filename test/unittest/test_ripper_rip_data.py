@@ -84,16 +84,16 @@ class TestRipDataErrorHandling(unittest.TestCase):
         utils.rip_data(job)
         self.assertEqual(job.label, "BACKUP.")
 
-    @mock.patch.object(utils.os.path, "isfile", return_value=False)
     @mock.patch("builtins.open", new_callable=mock.mock_open)
     @mock.patch.object(utils.subprocess, "check_output", return_value=b"")
-    def test_silent_move_failure_marks_failure_and_keeps_source(self, mock_check, mock_open_, mock_isfile):
-        # dd succeeds but the move silently fails (move_files_main swallows its
-        # own errors). rip_data must NOT report success or delete the source.
-        result = utils.rip_data(make_job())
-        self.assertFalse(result)
-        self.database_updater.assert_called_once()
-        self.assertEqual(self.database_updater.call_args[0][0]["status"], JobState.FAILURE.value)
+    def test_move_failure_raises_and_keeps_source(self, mock_check, mock_open_):
+        # dd succeeds but the move fails. move_files_main now RAISES; rip_data
+        # deliberately does NOT catch it (its except would unlink the good .part),
+        # so it propagates to the top-level handler and the raw .part is kept
+        # (rmtree never runs).
+        self.move_files_main.side_effect = utils.RipperException("move failed")
+        with self.assertRaises(utils.RipperException):
+            utils.rip_data(make_job())
         self.rmtree.assert_not_called()
 
 

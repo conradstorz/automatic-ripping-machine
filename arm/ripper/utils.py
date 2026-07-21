@@ -593,16 +593,14 @@ def rip_data(job):
         full_final_file = os.path.join(final_path, f"{safe_label}.iso")
         logging.info(f"Moving data-disc from '{incomplete_filename}' to '{full_final_file}'")
         move_files_main(incomplete_filename, full_final_file, final_path)
-        # move_files_main swallows its own errors, so confirm the ISO actually
-        # arrived before reporting success -- otherwise the raw_path cleanup
-        # below would delete the .part that was never moved (silent data loss).
-        if os.path.isfile(full_final_file):
-            logging.info("Data rip call successful")
-            success = True
-        else:
-            err = f"Data rip move failed: '{full_final_file}' not created; keeping source '{incomplete_filename}'"
-            logging.error(err)
-            database_updater({"status": JobState.FAILURE.value, "errors": err}, job)
+        # move_files_main now raises RipperException on a failed/missing move.
+        # It is intentionally NOT caught here (the except below unlinks the
+        # source, which would destroy a good ISO that merely failed to move):
+        # the raise propagates to the top-level handler, marks the job FAILURE,
+        # and leaves the .part in raw_path for retry. Reaching here means the
+        # ISO is in place.
+        logging.info("Data rip call successful")
+        success = True
     except (subprocess.CalledProcessError, OSError, ValueError) as dd_error:
         returncode = getattr(dd_error, "returncode", "n/a")
         detail = getattr(dd_error, "output", None) or dd_error
