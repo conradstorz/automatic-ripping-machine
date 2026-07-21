@@ -527,6 +527,8 @@ def terminate_process(pid):
 def change_job_params(config_id):
     """Update values for job"""
     job = Job.query.get(config_id)
+    if job is None:
+        return {'return': '', 'success': False, 'error': f'Job {config_id} not found'}
     config = job.config
     form = ChangeParamsForm(request.args, meta={'csrf': False})
     app.logger.debug("Before valid")

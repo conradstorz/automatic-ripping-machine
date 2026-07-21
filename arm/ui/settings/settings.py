@@ -224,6 +224,9 @@ def save_ui_settings():
     success = False
     arm_ui_cfg = UISettings.query.get(1)
     if form.validate_on_submit():
+        if arm_ui_cfg is None:
+            app.logger.error("UISettings row (id=1) is missing; cannot save UI settings.")
+            return {'success': False, 'error': 'UI settings not initialised', 'form': 'arm ui settings'}
         use_icons = (str(form.use_icons.data).strip().lower() == "true")
         save_remote_images = (str(form.save_remote_images.data).strip().lower() == "true")
         arm_ui_cfg.index_refresh = format(form.index_refresh.data)
@@ -318,6 +321,9 @@ def server_info():
             f"Updated description: [{str(form_drive.description.data)}] " +
             f"Updated mode: [{str(form_drive.drive_mode.data)}]")
         drive = SystemDrives.query.filter_by(drive_id=form_drive.id.data).first()
+        if drive is None:
+            flash(f"Drive {form_drive.id.data} not found", "error")
+            return redirect(url_for(REDIRECT_SETTINGS))
         drive.description = str(form_drive.description.data).strip()
         drive.name = str(form_drive.name.data).strip()
         drive.drive_mode = str(form_drive.drive_mode.data).strip()
@@ -395,6 +401,9 @@ def drive_manual(manual_id):
     """
 
     drive = SystemDrives.query.filter_by(drive_id=manual_id).first()
+    if drive is None:
+        flash(f"Drive {manual_id} not found", "error")
+        return redirect(url_for(REDIRECT_SETTINGS))
     dev_path = drive.mount.lstrip('/dev/')
 
     cmd = os.path.join(

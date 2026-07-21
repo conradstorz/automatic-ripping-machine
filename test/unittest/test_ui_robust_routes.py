@@ -52,6 +52,24 @@ class TestRobustRoutes(unittest.TestCase):
         self.assertIn(b'boom', resp.data)
 
 
+class TestBadInputGuards(unittest.TestCase):
+
+    def test_jobdetail_bad_id_returns_404_not_500(self):
+        with login_disabled():
+            resp = app.test_client().get('/jobdetail?job_id=999999999')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_logs_missing_params_returns_400_not_500(self):
+        with login_disabled():
+            resp = app.test_client().get('/logs')   # no mode/logfile
+        self.assertEqual(resp.status_code, 400)
+
+    def test_logreader_missing_logfile_returns_400(self):
+        with login_disabled():
+            resp = app.test_client().get('/logreader?mode=full')
+        self.assertEqual(resp.status_code, 400)
+
+
 class TestGitCheckVersion(unittest.TestCase):
 
     def test_missing_version_file_returns_unknown_not_unbound(self):

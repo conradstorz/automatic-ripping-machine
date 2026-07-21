@@ -7,7 +7,7 @@ Covers
 - logout [GET]
 - update_password [GET, POST]
 """
-from sqlite3 import OperationalError
+from sqlalchemy.exc import OperationalError
 import bcrypt
 from flask import redirect, render_template, request, Blueprint, flash, app, session
 from flask_login import LoginManager, login_required, \
@@ -45,9 +45,15 @@ def login():
     # if there is no user in the database
     try:
         user_list = User.query.all()
-        # If we don't raise an exception but the usr table is empty
+        # If we don't raise an exception but the usr table is empty, send the
+        # user to the DB-setup flow instead of falling through to admin=None
+        # (which would AttributeError-500 on POST).
         if not user_list:
             app.logger.error("No admin found")
+            flash(constants.NO_ADMIN_ACCOUNT, "danger")
+            dbform = DBUpdate(request.form)
+            db_update = ui_utils.arm_db_check()
+            return render_template(page_support_databaseupdate, db_update=db_update, dbform=dbform)
     except OperationalError as e:
         # Handle no data found when querying the db
         flash(constants.NO_ADMIN_ACCOUNT, "danger")
@@ -119,6 +125,9 @@ def update_password():
 
         # Get current password and dehash
         user = User.query.filter_by(email=username).first()
+        if user is None:
+            flash("Invalid username or password", "danger")
+            return render_template('update_password.html', user=username, form=form)
         current_password = user.password
         hashed = user.hash
         login_hashed = bcrypt.hashpw(old_password, hashed)

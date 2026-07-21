@@ -15,7 +15,7 @@ Covers
 
 import json
 from flask_login import LoginManager, login_required, current_user  # noqa: F401
-from flask import render_template, request, Blueprint, flash, redirect, url_for
+from flask import render_template, request, Blueprint, flash, redirect, url_for, abort
 from werkzeug.routing import ValidationError
 
 import arm.ui.utils as ui_utils
@@ -46,7 +46,7 @@ def jobdetail():
 
     job_id = request.args.get('job_id')
     if (job := Job.query.get(job_id)) is None:
-        raise ValueError('Job not found')
+        abort(404, description=f"Job {job_id} not found")
 
     # Check if a manual job, waiting for input and user has not provided input
     if job.manual_mode and job.status == JobState.MANUAL_WAIT_STARTED.value and not job.manual_start:
@@ -92,6 +92,8 @@ def jobdetail_load():
 
     job_id = request.args.get('job_id')
     job = Job.query.get(job_id)
+    if job is None:
+        abort(404, description=f"Job {job_id} not found")
 
     # Data passed back from webpage, process and update track fields
     if request.method == 'POST' and track_form.validate_on_submit():
@@ -142,6 +144,8 @@ def customtitle():
     job_id = request.args.get('job_id')
     ui_utils.job_id_validator(job_id)
     job = Job.query.get(job_id)
+    if job is None:
+        abort(404, description=f"Job {job_id} not found")
     form = TitleSearchForm(obj=job)
     if request.args.get("title"):
         args = {
@@ -253,6 +257,8 @@ def changeparams():
     """
     config_id = request.args.get('config_id')
     job = Job.query.get(config_id)
+    if job is None:
+        abort(404, description=f"Job {config_id} not found")
     config = job.config
     form = ChangeParamsForm(obj=config)
     return render_template('changeparams.html', title='Change Parameters', form=form, config=config)

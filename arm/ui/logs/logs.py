@@ -9,7 +9,7 @@ Covers
 import os
 from pathlib import Path
 from flask_login import LoginManager, login_required  # noqa: F401
-from flask import render_template, request, Blueprint, send_file, session
+from flask import render_template, request, Blueprint, send_file, session, abort
 from werkzeug.routing import ValidationError
 
 import arm.ui.utils as ui_utils
@@ -29,8 +29,10 @@ def logs():
 
     this holds the XHR request that sends to other routes for the data
     """
-    mode = request.args['mode']
-    logfile = request.args['logfile']
+    mode = request.args.get('mode')
+    logfile = request.args.get('logfile')
+    if not mode or not logfile:
+        abort(400, description="'mode' and 'logfile' query parameters are required")
     session["page_title"] = "Logs"
 
     return render_template('logview.html', file=logfile, mode=mode)
@@ -49,7 +51,7 @@ def listlogs(path):
 
     # Deal with bad data
     if not os.path.exists(full_path):
-        raise ValidationError
+        abort(404, description="Log directory not found")
 
     # Get all files in directory
     files = ui_utils.get_info(full_path)
@@ -67,12 +69,19 @@ def logreader():
     """
     log_path = cfg.arm_config['LOGPATH']
     mode = request.args.get('mode')
+    logfile = request.args.get('logfile')
     session["page_title"] = "Logs"
 
-    # We should use the job id and not get the raw logfile from the user
-    # Maybe search database and see if we can match the logname with a previous rip ?
-    full_path = os.path.join(log_path, request.args.get('logfile'))
-    ui_utils.validate_logfile(request.args.get('logfile'), mode, Path(full_path))
+    # Validate BEFORE joining: a missing logfile would make os.path.join raise
+    # TypeError, and validate_logfile raises non-HTTP exceptions that 500.
+    if not logfile:
+        abort(400, description="'logfile' query parameter is required")
+    full_path = os.path.join(log_path, logfile)
+    try:
+        ui_utils.validate_logfile(logfile, mode, Path(full_path))
+    except (ValidationError, FileNotFoundError) as log_error:
+        app.logger.warning(f"Rejected logfile request '{logfile}': {log_error}")
+        abort(404, description="Log file not found or invalid")
 
     # Only ARM logs
     if mode == "armcat":
@@ -83,7 +92,7 @@ def logreader():
     elif mode == "download":
         return send_file(full_path, as_attachment=True)
     else:
-        # No mode - error out
-        raise ValidationError
+        # No / unknown mode
+        abort(400, description="Unknown log mode")
 
     return app.response_class(generate, mimetype='text/plain')
