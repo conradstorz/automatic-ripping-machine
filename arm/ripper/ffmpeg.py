@@ -257,7 +257,7 @@ def ffmpeg_main_feature(src_path, out_path, job):
         logging.info("FFMPEG call successful")
         # Update the status of the job as succeeded
         track.status = "success"
-    except subprocess.CalledProcessError as ffmpeg_error:
+    except (subprocess.CalledProcessError, proc_watchdog.ProcessInactivityError) as ffmpeg_error:
         # If it fails mark the job as failed and log it
         err = f"Call to FFMPEG failed with code: {ffmpeg_error.returncode}"
         logging.error(err)
@@ -320,7 +320,7 @@ def ffmpeg_all(src_path, base_path, job):
                 # Transcode the title
                 run_transcode_cmd(src_path, out_file_path, job)
                 track.status = "success"
-            except subprocess.CalledProcessError as ff_error:
+            except (subprocess.CalledProcessError, proc_watchdog.ProcessInactivityError) as ff_error:
                 err = f"FFMPEG encoding of title {track.track_number} failed with code: {ff_error.returncode}"
                 logging.error(err)
                 track.status = "fail"
@@ -374,7 +374,7 @@ def ffmpeg_default(src_path, base_path, job):
         try:
             run_transcode_cmd(src_path_name, out_file_path, job)
             logging.info("Transcode succeeded")
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, proc_watchdog.ProcessInactivityError) as e:
             logging.error(f"Transcode failed: {e}")
 
     logging.info(PROCESS_COMPLETE)
@@ -457,7 +457,7 @@ def ffmpeg_mkv(src_path, base_path, job):
                 db.session.commit()
             else:
                 logging.debug("No matching DB track found to mark success")
-        except subprocess.CalledProcessError as ff_error:
+        except (subprocess.CalledProcessError, proc_watchdog.ProcessInactivityError) as ff_error:
             # Mark track and job as failed if ffmpeg fails
             err = f"Call to FFmpeg failed with code: {ff_error.returncode}"
             logging.error(err)
