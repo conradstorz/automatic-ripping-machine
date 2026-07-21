@@ -240,7 +240,8 @@ def rips():
     """
     This no longer works properly because of the 'transcoding' status
     """
-    active_jobs = Job.query.filter_by(~Job.finished)
+    # .filter (not .filter_by, which only takes kwargs) for a boolean expression.
+    active_jobs = Job.query.filter(~Job.finished).all()
     return render_template('activerips.html', jobs=active_jobs)
 
 

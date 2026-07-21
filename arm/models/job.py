@@ -351,7 +351,12 @@ class Job(db.Model):
 
     @hybrid_property
     def finished(self):
-        return JobState(self.status) in JOB_STATUS_FINISHED
+        # status may be None (fresh job) or a legacy/unknown string; degrade to
+        # False instead of raising ValueError from JobState(...).
+        try:
+            return JobState(self.status) in JOB_STATUS_FINISHED
+        except ValueError:
+            return False
 
     @finished.expression
     def finished(cls):
@@ -359,11 +364,17 @@ class Job(db.Model):
 
     @property
     def idle(self):
-        return JobState(self.status) == JobState.IDLE
+        try:
+            return JobState(self.status) == JobState.IDLE
+        except ValueError:
+            return False
 
     @property
     def ripping(self):
-        return JobState(self.status) in JOB_STATUS_RIPPING
+        try:
+            return JobState(self.status) in JOB_STATUS_RIPPING
+        except ValueError:
+            return False
 
     @property
     def run_time(self):

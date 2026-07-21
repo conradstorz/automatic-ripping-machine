@@ -367,10 +367,12 @@ def handbrake_char_encoding(cmd):
     """
     Allows us to try multiple char encoding types\n\n
     :param cmd: CMD to push
-    :return: the output from HandBrake or -1 if it fails
+    :return: the list of output lines from HandBrake, or None if it fails
     """
     charset_found = False
-    hand_brake_output = -1
+    # None (not -1) so the caller's `is not None` guard reaches its graceful
+    # "unable to get track information" path instead of iterating an int.
+    hand_brake_output = None
     scan_timeout = utils.config_int('SUBPROCESS_TIMEOUT_SECS', 60) or None
     try:
         hand_brake_output = subprocess.check_output(

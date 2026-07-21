@@ -90,11 +90,14 @@ def home():
 
 
 @app.route('/error')
-def was_error(error):
+def was_error(error=None):
     """
-    Catch all error page
+    Catch all error page. `error` is optional (the route supplies no path arg),
+    and may be passed as a query string, so GET /error no longer 500s.
     :return: Error page
     """
+    if error is None:
+        error = request.args.get('error', 'An error occurred.')
     return render_template(constants.ERROR_PAGE, title='error', error=error)
 
 

@@ -128,8 +128,12 @@ def check_db_version(install_path, db_file):
             if head_revision == db_version:
                 app.logger.info("Database is now up to date")
             else:
-                app.logger.error(f"Database is still out of date. "
-                                 f"Head is {head_revision} and database is {db_version}.  Exiting arm.")
+                # Migration ran but the DB is still not at head: stop rather than
+                # fall through and use a half-upgraded database.
+                msg = (f"Database is still out of date after upgrade. "
+                       f"Head is {head_revision} and database is {db_version}.")
+                app.logger.error(msg)
+                raise RuntimeError(msg)
 
 
 def arm_alembic_get():
@@ -153,10 +157,14 @@ def arm_alembic_get():
 
 def arm_db_get():
     """
-    Get the Alembic Head revision
+    Get the Alembic Head revision, or None if the alembic_version table is
+    empty/missing (a partially-initialised DB) instead of crashing on a None.
     """
     alembic_db = AlembicVersion()
     db_revision = alembic_db.query.first()
+    if db_revision is None:
+        app.logger.debug("Database alembic_version table is empty or missing")
+        return None
     app.logger.debug(f"Database Head is: {db_revision.version_num}")
     return db_revision
 
@@ -178,16 +186,17 @@ def arm_db_check():
         db_exists = True
         # Get the database alembic version
         db_revision = arm_db_get()
-        if db_revision.version_num == head_revision:
+        if db_revision is not None and db_revision.version_num == head_revision:
             db_current = True
             app.logger.debug(
                 f"Database is current. Head: {head_revision}" +
                 f"DB: {db_revision.version_num}")
         else:
             db_current = False
+            db_ver = db_revision.version_num if db_revision is not None else "none"
             app.logger.info(
                 "Database is not current, update required." +
-                f" Head: {head_revision} DB: {db_revision.version_num}")
+                f" Head: {head_revision} DB: {db_ver}")
     else:
         db_exists = False
         db_current = False
@@ -263,10 +272,12 @@ def arm_db_migrate():
         app.logger.info("Database is now up to date")
         arm_db_initialise()
     else:
-        app.logger.error(
-            "Database is still out of date. " +
-            f"Head is {head_revision} and database " +
-            f"is {db_revision.version_num}.  Exiting arm.")
+        # Migration ran but the DB is still not at head: stop rather than
+        # return and let a half-upgraded database be used.
+        msg = (f"Database is still out of date after upgrade. Head is {head_revision} "
+               f"and database is {db_revision.version_num}.")
+        app.logger.error(msg)
+        raise RuntimeError(msg)
 
 
 def arm_db_initialise():
@@ -961,22 +972,23 @@ def git_check_version():
 
     install_path = cfg.arm_config['INSTALLPATH']
 
-    # Read the local version from the VERSION file
+    # Read the local version from the VERSION file. Initialise first so a
+    # missing/unreadable file returns cleanly instead of UnboundLocalError
+    # (which would 500 every /settings load).
+    local_version = "unknown"
     version_file_path = os.path.join(install_path, 'VERSION')
     try:
         with open(version_file_path) as version_file:
             local_version = version_file.read().strip()
-    except FileNotFoundError as e:
-        app.logger.debug(f"Error - ARM Local Version file not found: {e}")
-    except IOError as e:
+    except (FileNotFoundError, IOError) as e:
         app.logger.debug(f"Error - ARM Local Version file error: {e}")
 
     # Read the remote version from Git (without modifying local files)
     try:
         remote_version = subprocess.check_output(
-            'git show origin/HEAD:VERSION', shell=True, cwd=install_path
+            'git show origin/HEAD:VERSION', shell=True, cwd=install_path, timeout=30
         ).decode('ascii').strip()
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         app.logger.debug(f"Error - ARM Remote Version error: {e}")
         remote_version = "Unknown"
 
