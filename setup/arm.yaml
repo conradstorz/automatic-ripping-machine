@@ -231,6 +231,21 @@ MAKEMKV_CONCURRENT_WAIT_MAX_SECS: 3600
 # died) and orphaned makemkvcon processes, failing/ejecting and reaping them respectively.
 JOB_WATCHDOG_INTERVAL_SECS: 300
 
+# Inactivity watchdog for the LONG media tools (HandBrake, ffmpeg, abcde, dd): if the tool
+# shows no sign of life (no output and no progress-file/output update) for this many seconds
+# it is assumed hung and its process tree is killed so the job fails instead of hanging a
+# drive/CPU forever. Healthy encodes/rips keep emitting progress. Set to 0 to disable.
+SUBPROCESS_MAX_INACTIVITY_SECS: 300
+
+# Wall-clock timeout (seconds) for SHORT helper commands (mount, lsdvd, findmnt, ffprobe,
+# HandBrake --scan, eject, etc.). These should finish in seconds; if one wedges on bad media
+# it is aborted instead of blocking the job. Set to 0 to disable.
+SUBPROCESS_TIMEOUT_SECS: 60
+
+# Timeout (seconds) for outbound HTTP calls (metadata lookups, Emby, remote CRC db,
+# MusicBrainz). Prevents a slow/unreachable server from hanging a rip or a web-UI worker.
+HTTP_TIMEOUT_SECS: 15
+
 # Remove any files created in the raw and transcode paths for the job after processing is complete
 DELRAWFILES: true
 

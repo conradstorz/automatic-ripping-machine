@@ -37,9 +37,12 @@ class TestRipDataErrorHandling(unittest.TestCase):
             ("database_updater", None),
         ):
             setattr(self, name, mock.patch.object(utils, name, return_value=ret).start())
+        # dd now runs through the shared watchdog; default it to a clean success.
+        self.run_watched = mock.patch.object(utils.proc_watchdog, "run_watched", return_value="").start()
         self.rmtree = mock.patch.object(utils.shutil, "rmtree").start()
         # A mutable config dict tests can override per-case.
-        mock.patch.object(utils.cfg, "arm_config", {"DATA_RIP_PARAMETERS": "bs=1M"}).start()
+        mock.patch.object(utils.cfg, "arm_config",
+                          {"DATA_RIP_PARAMETERS": "bs=1M", "SUBPROCESS_MAX_INACTIVITY_SECS": 300}).start()
         self.addCleanup(mock.patch.stopall)
 
     def assert_marked_failure(self, result):
@@ -47,10 +50,9 @@ class TestRipDataErrorHandling(unittest.TestCase):
         self.database_updater.assert_called_once()
         self.assertEqual(self.database_updater.call_args[0][0]["status"], JobState.FAILURE.value)
 
-    @mock.patch("builtins.open", new_callable=mock.mock_open)
-    @mock.patch.object(utils.subprocess, "check_output", side_effect=FileNotFoundError("dd"))
-    def test_missing_dd_binary_marks_failure_not_crash(self, mock_check, mock_open_):
-        # dd not on PATH -> FileNotFoundError (not CalledProcessError).
+    def test_missing_dd_binary_marks_failure_not_crash(self):
+        # dd not on PATH -> FileNotFoundError (an OSError) from the runner.
+        self.run_watched.side_effect = FileNotFoundError("dd")
         self.assert_marked_failure(utils.rip_data(make_job()))
 
     def test_malformed_rip_parameters_marks_failure_not_crash(self):
@@ -58,25 +60,25 @@ class TestRipDataErrorHandling(unittest.TestCase):
         utils.cfg.arm_config["DATA_RIP_PARAMETERS"] = 'bs=1M count="5'
         self.assert_marked_failure(utils.rip_data(make_job()))
 
-    @mock.patch("builtins.open", side_effect=OSError("logpath unwritable"))
-    def test_logfile_open_failure_marks_failure_not_crash(self, mock_open_):
-        # Opening the job logfile fails -> OSError, not CalledProcessError.
+    def test_dd_nonzero_exit_marks_failure_not_crash(self):
+        # dd exits non-zero -> CalledProcessError from the runner.
+        self.run_watched.side_effect = subprocess.CalledProcessError(1, "dd", output="read error")
+        self.assert_marked_failure(utils.rip_data(make_job()))
+
+    def test_dd_watchdog_kill_marks_failure_not_crash(self):
+        # dd wedges and the inactivity watchdog kills it -> ProcessInactivityError.
+        self.run_watched.side_effect = utils.proc_watchdog.ProcessInactivityError("hung")
         self.assert_marked_failure(utils.rip_data(make_job()))
 
     @mock.patch.object(utils.os.path, "exists", return_value=True)
     @mock.patch.object(utils.os, "unlink", side_effect=FileNotFoundError("gone"))
-    @mock.patch("builtins.open", new_callable=mock.mock_open)
-    @mock.patch.object(utils.subprocess, "check_output",
-                       side_effect=subprocess.CalledProcessError(1, "dd"))
-    def test_cleanup_unlink_failure_still_marks_failure(self, mock_check, mock_open_, mock_unlink, mock_exists):
-        # dd failed before creating the .part file; the cleanup unlink itself
-        # raises, but the job must still be marked FAILURE.
+    def test_cleanup_unlink_failure_still_marks_failure(self, mock_unlink, mock_exists):
+        # dd failed; the cleanup unlink itself raises, but the job must still
+        # be marked FAILURE.
+        self.run_watched.side_effect = subprocess.CalledProcessError(1, "dd")
         self.assert_marked_failure(utils.rip_data(make_job()))
 
-    @mock.patch.object(utils.os.path, "isfile", return_value=True)
-    @mock.patch("builtins.open", new_callable=mock.mock_open)
-    @mock.patch.object(utils.subprocess, "check_output", return_value=b"")
-    def test_label_not_mutated_by_sanitizing(self, mock_check, mock_open_, mock_isfile):
+    def test_label_not_mutated_by_sanitizing(self):
         # rip_data must sanitize only for path building, not overwrite
         # job.label, so the dupe-check query and display keep the raw value.
         job = make_job()
@@ -84,9 +86,7 @@ class TestRipDataErrorHandling(unittest.TestCase):
         utils.rip_data(job)
         self.assertEqual(job.label, "BACKUP.")
 
-    @mock.patch("builtins.open", new_callable=mock.mock_open)
-    @mock.patch.object(utils.subprocess, "check_output", return_value=b"")
-    def test_move_failure_raises_and_keeps_source(self, mock_check, mock_open_):
+    def test_move_failure_raises_and_keeps_source(self):
         # dd succeeds but the move fails. move_files_main now RAISES; rip_data
         # deliberately does NOT catch it (its except would unlink the good .part),
         # so it propagates to the top-level handler and the raw .part is kept

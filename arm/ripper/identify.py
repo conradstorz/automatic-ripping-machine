@@ -92,8 +92,10 @@ def identify(job):
                          f"year:{job.year} video_type:{job.video_type} "
                          f"disctype: {job.disctype}")
             logging.debug(f"identify.job.end ---- \n\r{job.pretty_table()}")
-    # No need to warn if we cant unmount
-    os.system("umount " + job.devpath)
+    # No need to warn if we cant unmount. Via arm_subprocess so it inherits the
+    # short-command timeout (a busy/stuck device can't block here) and avoids the
+    # shell + string concatenation of the unvalidated devpath.
+    arm_subprocess(["umount", job.devpath])
 
 
 def identify_bluray(job):
@@ -165,7 +167,8 @@ def identify_dvd(job):
         job.crc_id = str(crc64)
         urlstring = f"https://1337server.pythonanywhere.com/api/v1/?mode=s&crc64={crc64}"
         logging.debug(urlstring)
-        dvd_info_xml = urllib.request.urlopen(urlstring).read()
+        dvd_info_xml = urllib.request.urlopen(
+            urlstring, timeout=utils.config_int('HTTP_TIMEOUT_SECS', 15)).read()
         arm_api_json = json.loads(dvd_info_xml)
         logging.debug(f"dvd xml - {arm_api_json}")
         logging.debug(f"results = {arm_api_json['results']}")

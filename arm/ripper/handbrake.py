@@ -9,44 +9,50 @@ import shlex
 import arm.config.config as cfg
 
 from arm.ripper import utils
+from arm.ripper import proc_watchdog
 from arm.ui import app, db  # noqa E402
 from arm.models.job import JobState
 
 PROCESS_COMPLETE = "Handbrake processing complete"
 
 
-def run_handbrake_command(cmd, track=None, track_number=None):
+def run_handbrake_command(cmd, track=None, track_number=None, progress_file=None):
     """
     Execute a HandBrake command and handle errors consistently.
 
     :param cmd: The HandBrake command to execute
     :param track: Optional track object to update status
     :param track_number: Optional track number for error messages
+    :param progress_file: HandBrake's logfile (it redirects output there); an update to it
+        counts as a heartbeat so the inactivity watchdog doesn't false-kill a live encode.
     :return: Output from HandBrake command
-    :raises subprocess.CalledProcessError: If HandBrake fails
+    :raises subprocess.CalledProcessError: If HandBrake exits non-zero
+    :raises proc_watchdog.ProcessInactivityError: If HandBrake wedges (no progress for the window)
     """
     logging.debug(f"Sending command: {cmd}")
 
     try:
-        hand_brake_output = subprocess.check_output(
-            cmd,
-            shell=True
-        ).decode("utf-8")
+        # Inactivity watchdog: HandBrake writes progress to its logfile, so a
+        # fresh logfile mtime is the heartbeat; a wedged encode is killed
+        # instead of hanging the transcode forever.
+        hand_brake_output = proc_watchdog.run_watched(
+            cmd, shell=True,
+            inactivity=utils.config_int('SUBPROCESS_MAX_INACTIVITY_SECS', 300),
+            progress_file=progress_file)
         logging.debug(f"Handbrake exit code: {hand_brake_output}")
         if track:
             track.status = "success"
         return hand_brake_output
-    except subprocess.CalledProcessError as hb_error:
+    except (subprocess.CalledProcessError, proc_watchdog.ProcessInactivityError) as hb_error:
         if track_number:
-            err = f"Handbrake encoding of title {track_number} failed with code: {hb_error.returncode}" \
-                  f"({hb_error.output})"
+            err = f"Handbrake encoding of title {track_number} failed: {hb_error}"
         else:
-            err = f"Call to handbrake failed with code: {hb_error.returncode}({hb_error.output})"
+            err = f"Call to handbrake failed: {hb_error}"
         logging.error(err)
         if track:
             track.status = "fail"
             track.error = err
-        raise subprocess.CalledProcessError(hb_error.returncode, cmd)
+        raise
 
 
 def build_handbrake_command(srcpath, filepathname, hb_preset, hb_args, logfile,
@@ -128,9 +134,9 @@ def handbrake_main_feature(srcpath, basepath, logfile, job):
     cmd = build_handbrake_command(srcpath, filepathname, hb_preset, hb_args, logfile, main_feature=True)
 
     try:
-        run_handbrake_command(cmd, track)
+        run_handbrake_command(cmd, track, progress_file=logfile)
         logging.info("Handbrake call successful")
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, proc_watchdog.ProcessInactivityError):
         job.errors = track.error
         job.status = JobState.FAILURE.value
         db.session.commit()
@@ -189,8 +195,8 @@ def handbrake_all(srcpath, basepath, logfile, job):
                                           track_number=track.track_number)
 
             try:
-                run_handbrake_command(cmd, track, track.track_number)
-            except subprocess.CalledProcessError:
+                run_handbrake_command(cmd, track, track.track_number, progress_file=logfile)
+            except (subprocess.CalledProcessError, proc_watchdog.ProcessInactivityError):
                 db.session.commit()
                 raise
 
@@ -251,7 +257,7 @@ def handbrake_mkv(srcpath, basepath, logfile, job):
         logging.info(f"Transcoding file {shlex.quote(files)} to {shlex.quote(filepathname)}")
 
         cmd = build_handbrake_command(srcpathname, filepathname, hb_preset, hb_args, logfile)
-        run_handbrake_command(cmd)
+        run_handbrake_command(cmd, progress_file=logfile)
 
     logging.info(PROCESS_COMPLETE)
     logging.debug(f"\n\r{job.pretty_table()}")
@@ -365,13 +371,15 @@ def handbrake_char_encoding(cmd):
     """
     charset_found = False
     hand_brake_output = -1
+    scan_timeout = utils.config_int('SUBPROCESS_TIMEOUT_SECS', 60) or None
     try:
         hand_brake_output = subprocess.check_output(
             cmd,
             stderr=subprocess.STDOUT,
-            shell=True
+            shell=True,
+            timeout=scan_timeout
         ).decode('utf-8', 'ignore').splitlines()
-    except subprocess.CalledProcessError as hb_error:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as hb_error:
         logging.error("Couldn't find a valid track with utf-8 encoding. Trying with cp437")
         logging.error(f"Specific error is: {hb_error}")
     else:
@@ -381,9 +389,10 @@ def handbrake_char_encoding(cmd):
             hand_brake_output = subprocess.check_output(
                 cmd,
                 stderr=subprocess.STDOUT,
-                shell=True
+                shell=True,
+                timeout=scan_timeout
             ).decode('cp437').splitlines()
-        except subprocess.CalledProcessError as hb_error:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as hb_error:
             logging.error("Couldn't find a valid track. "
                           "Try running the command manually to see more specific errors.")
             logging.error(f"Specific error is: {hb_error}")

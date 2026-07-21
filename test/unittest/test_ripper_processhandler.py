@@ -4,7 +4,7 @@ from unittest.mock import patch
 import subprocess
 
 sys.path.insert(0, '/opt/arm')
-from arm.ripper.ProcessHandler import arm_subprocess    # noqa: E402
+from arm.ripper.ProcessHandler import arm_subprocess, _timeout_secs    # noqa: E402
 
 
 class TestProcessHandler(unittest.TestCase):
@@ -24,7 +24,8 @@ class TestProcessHandler(unittest.TestCase):
 
         self.assertEqual(result, mock_output)
         mock_check_output.assert_called_once_with(
-            cmd, shell=in_shell, stderr=subprocess.STDOUT, encoding="utf-8")
+            cmd, shell=in_shell, stderr=subprocess.STDOUT, encoding="utf-8",
+            timeout=_timeout_secs(None))
 
     @patch("subprocess.check_output")
     def test_arm_subprocess_error(self, mock_check_output):
@@ -45,7 +46,8 @@ class TestProcessHandler(unittest.TestCase):
 
         self.assertEqual(result, None)
         mock_check_output.assert_called_once_with(
-            cmd, shell=in_shell, stderr=subprocess.STDOUT, encoding="utf-8")
+            cmd, shell=in_shell, stderr=subprocess.STDOUT, encoding="utf-8",
+            timeout=_timeout_secs(None))
 
 
 if __name__ == '__main__':

@@ -22,6 +22,7 @@ from netifaces import interfaces, ifaddresses, AF_INET
 
 import arm.config.config as cfg
 from arm.ripper.ProcessHandler import arm_subprocess
+from arm.ripper import proc_watchdog
 from arm.ui import db  # needs to be imported before models
 from arm.models.job import Job, JobState
 from arm.models.notifications import Notifications
@@ -515,11 +516,14 @@ def rip_music(job, logfile):
     abcfile = cfg.arm_config["ABCDE_CONFIG_FILE"]
     if job.disctype == "music":
         logging.info("Disc identified as music")
+        # abcde redirects its output to this logfile, so a fresh logfile mtime is
+        # the watchdog heartbeat for the (long) audio rip.
+        abcde_log = os.path.join(job.config.LOGPATH, logfile)
         # If user has set a cfg.arm_config file with ARM use it
         if os.path.isfile(abcfile):
-            cmd = f'abcde -d "{job.devpath}" -c {abcfile} >> "{os.path.join(job.config.LOGPATH, logfile)}" 2>&1'
+            cmd = f'abcde -d "{job.devpath}" -c {abcfile} >> "{abcde_log}" 2>&1'
         else:
-            cmd = f'abcde -d "{job.devpath}" >> "{os.path.join(job.config.LOGPATH, logfile)}" 2>&1'
+            cmd = f'abcde -d "{job.devpath}" >> "{abcde_log}" 2>&1'
 
         logging.debug(f"Sending command: {cmd}")
         args = {"status": JobState.AUDIO_RIPPING.value}
@@ -527,13 +531,18 @@ def rip_music(job, logfile):
 
         try:
             # TODO check output and confirm all tracks ripped; find "Finished\.$"
-            subprocess.check_output(cmd, shell=True).decode("utf-8")
+            # Inactivity watchdog: a wedged abcde (no progress written to its log
+            # for the window) is killed instead of hanging the drive forever.
+            proc_watchdog.run_watched(
+                cmd, shell=True,
+                inactivity=config_int('SUBPROCESS_MAX_INACTIVITY_SECS', 300),
+                progress_file=abcde_log)
             logging.info("abcde call successful")
             args = {"status": JobState.IDLE.value}
             database_updater(args, job)
             return True
-        except subprocess.CalledProcessError as ab_error:
-            err = f"Call to abcde failed with code: {ab_error.returncode} ({ab_error.output})"
+        except (subprocess.CalledProcessError, proc_watchdog.ProcessInactivityError) as ab_error:
+            err = f"Call to abcde failed: {ab_error}"
             args = {"status": JobState.FAILURE.value, "errors": err}
             database_updater(args, job)
             logging.error(err)
@@ -578,18 +587,24 @@ def rip_data(job):
     incomplete_filename = os.path.join(raw_path, safe_label + ".part")
     make_dir(final_path)
     logging.info(f"Ripping data disc to: {incomplete_filename}")
-    # Added from pull 366
-    log_path = os.path.join(job.config.LOGPATH, job.logfile)
     # Build the command and run dd inside the try: dropping shell=True means a
-    # missing dd binary (FileNotFoundError), an unwritable logfile (OSError), or
+    # missing dd binary (FileNotFoundError), an unwritable path (OSError), or
     # a malformed DATA_RIP_PARAMETERS (shlex ValueError) surface as their own
-    # exception types, none of which are CalledProcessError. Catch them all so a
-    # rip failure marks the job FAILURE instead of crashing the ripper mid-job.
+    # exception types, none of which are CalledProcessError. Catch them all
+    # (plus a watchdog kill) so a rip failure marks the job FAILURE instead of
+    # crashing the ripper mid-job.
     try:
         dd_cmd = build_dd_command(job.devpath, incomplete_filename, cfg.arm_config["DATA_RIP_PARAMETERS"])
         logging.debug(f"Sending command: {dd_cmd}")
-        with open(log_path, "a", encoding="utf-8") as log_fh:
-            subprocess.check_output(dd_cmd, stderr=log_fh).decode("utf-8")
+        # dd is silent by default, but writes the .part output file continuously,
+        # so its mtime is the watchdog heartbeat: a dd wedged on a bad sector
+        # (no writes) is killed instead of hanging the drive forever.
+        dd_output = proc_watchdog.run_watched(
+            dd_cmd,
+            inactivity=config_int('SUBPROCESS_MAX_INACTIVITY_SECS', 300),
+            progress_file=incomplete_filename)
+        if dd_output:
+            logging.debug(f"dd output: {dd_output}")
         full_final_file = os.path.join(final_path, f"{safe_label}.iso")
         logging.info(f"Moving data-disc from '{incomplete_filename}' to '{full_final_file}'")
         move_files_main(incomplete_filename, full_final_file, final_path)
@@ -601,7 +616,8 @@ def rip_data(job):
         # ISO is in place.
         logging.info("Data rip call successful")
         success = True
-    except (subprocess.CalledProcessError, OSError, ValueError) as dd_error:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError,
+            proc_watchdog.ProcessInactivityError) as dd_error:
         returncode = getattr(dd_error, "returncode", "n/a")
         detail = getattr(dd_error, "output", None) or dd_error
         err = f"Data rip failed with code: {returncode}({detail})"

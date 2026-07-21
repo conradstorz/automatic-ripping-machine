@@ -10,6 +10,7 @@ import re
 import arm.config.config as cfg
 
 from arm.ripper import utils
+from arm.ripper import proc_watchdog
 from arm.ui import app, db  # noqa E402
 from arm.models.job import JobState
 
@@ -67,11 +68,13 @@ def probe_source(src_path):
     cmd = f"ffprobe -v error -print_format json -show_format -show_streams {shlex.quote(src_path)}"
     logging.debug(f"FFProbe command: {cmd}")
     try:
-        out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT).decode('utf-8')
+        out = subprocess.check_output(
+            cmd, shell=True, stderr=subprocess.STDOUT,
+            timeout=utils.config_int('SUBPROCESS_TIMEOUT_SECS', 60) or None).decode('utf-8')
         logging.debug(f"ffprobe output: {out}")
         return out
-    except subprocess.CalledProcessError as e:
-        logging.error(f"ffprobe failed: {e.returncode} {e.output}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        logging.error(f"ffprobe failed: {e}")
         return None
 
 
@@ -483,34 +486,31 @@ def run_transcode_cmd(src_file, out_file, job, ff_pre_args="", ff_post_args=""):
         duration_sec_str = subprocess.check_output(
             f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "
             f"{shlex.quote(src_file)}",
-            shell=True, stderr=subprocess.STDOUT).decode('utf-8').strip()
+            shell=True, stderr=subprocess.STDOUT,
+            timeout=utils.config_int('SUBPROCESS_TIMEOUT_SECS', 60) or None).decode('utf-8').strip()
         total_duration = int(float(duration_sec_str) * 1_000_000)
-    except (subprocess.CalledProcessError, ValueError) as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as e:
         logging.error(f"Could not get duration from ffprobe: {e}")
         # We can continue without progress reporting if this fails
 
-        # Build the ffmpeg command without progress reporting
+    # Build the ffmpeg command without progress reporting
     cmd = (f"{cfg.arm_config['FFMPEG_CLI']} {ff_pre_args} -i {shlex.quote(src_file)} "
            f"{'-progress pipe:1 ' if logging.getLogger().isEnabledFor(logging.DEBUG) else ''}"
            f"{ff_post_args} {shlex.quote(out_file)}")
 
     logging.debug(f"FFMPEG command: {cmd}")
+    debug = logging.getLogger().isEnabledFor(logging.DEBUG)
 
-    # Execute the ffmpeg command and capture progress
-    process = subprocess.Popen(shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               universal_newlines=True, bufsize=1)
-
-    for line in process.stdout:  # type: ignore
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
+    def _handle_line(line):
+        # ffmpeg streams progress to stdout, so stdout IS the heartbeat here.
+        if debug:
             logging.debug(line.strip())
             if total_duration > 0 and "out_time_us" in line:
                 parts = line.strip().split("=")
                 if len(parts) == 2 and parts[0] == "out_time_us":
                     try:
                         out_time_us = int(parts[1])
-                        percentage = (out_time_us / total_duration) * 100
-                        # Clamp percentage between 0 and 100
-                        percentage = max(0, min(100, percentage))
+                        percentage = max(0, min(100, (out_time_us / total_duration) * 100))
                         logging.info(f"ARM: Transcoding progress: {percentage:.2f}%")
                     except ValueError:
                         pass
@@ -518,18 +518,17 @@ def run_transcode_cmd(src_file, out_file, job, ff_pre_args="", ff_post_args=""):
             if total_duration > 0 and "time=" in line:
                 time_search = re.search(r'time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})', line)
                 if time_search:
-                    hours = int(time_search.group(1))
-                    minutes = int(time_search.group(2))
-                    seconds = int(time_search.group(3))
-                    milliseconds = int(time_search.group(4))
+                    hours, minutes, seconds, milliseconds = (int(time_search.group(i)) for i in range(1, 5))
                     out_time_us = (hours * 3600 + minutes * 60 + seconds) * 1000000 + milliseconds * 10000
-                    percentage = (out_time_us / total_duration) * 100
-                    percentage = max(0, min(100, percentage))
+                    percentage = max(0, min(100, (out_time_us / total_duration) * 100))
                     logging.info(f"ARM: {line.strip()} - {percentage:.2f}%")
             else:
                 logging.debug(line.strip())
 
-    process.wait()
-
-    if process.returncode != 0:
-        raise subprocess.CalledProcessError(process.returncode, cmd)
+    # Inactivity watchdog: a wedged ffmpeg (no output for the window) is killed
+    # instead of hanging the transcode forever. run_watched raises
+    # CalledProcessError on a non-zero exit, matching the previous behavior.
+    proc_watchdog.run_watched(
+        shlex.split(cmd),
+        inactivity=utils.config_int('SUBPROCESS_MAX_INACTIVITY_SECS', 300),
+        on_line=_handle_line)
