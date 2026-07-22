@@ -79,6 +79,7 @@ def check_db_version(install_path, db_file):
     """
     from alembic.script import ScriptDirectory
     from alembic.config import Config  # noqa: F811
+    from contextlib import closing
     import sqlite3
     import flask_migrate
 
@@ -104,36 +105,37 @@ def check_db_version(install_path, db_file):
         head_revision = script.get_current_head()
         app.logger.debug("Alembic Head is: " + head_revision)
 
-        conn = sqlite3.connect(db_file)
-        c = conn.cursor()
-
-        c.execute('SELECT version_num FROM alembic_version')
-        db_version = c.fetchone()[0]
-        app.logger.debug(f"Database version is: {db_version}")
-        if head_revision == db_version:
-            app.logger.info("Database is up to date")
-        else:
-            app.logger.info(
-                f"Database out of date. Head is {head_revision} and database is {db_version}.  Upgrading database...")
-            with app.app_context():
-                unique_stamp = round(time() * 100)
-                app.logger.info(f"Backing up database '{db_file}' to '{db_file}{unique_stamp}'.")
-                shutil.copy(db_file, db_file + "_" + str(unique_stamp))
-                flask_migrate.upgrade(mig_dir)
-            app.logger.info("Upgrade complete.  Validating version level...")
-
-            c.execute("SELECT version_num FROM alembic_version")
+        # closing() guarantees the sqlite connection is released on every exit
+        # path (including the RuntimeError below), rather than leaking it.
+        with closing(sqlite3.connect(db_file)) as conn:
+            c = conn.cursor()
+            c.execute('SELECT version_num FROM alembic_version')
             db_version = c.fetchone()[0]
             app.logger.debug(f"Database version is: {db_version}")
             if head_revision == db_version:
-                app.logger.info("Database is now up to date")
+                app.logger.info("Database is up to date")
             else:
-                # Migration ran but the DB is still not at head: stop rather than
-                # fall through and use a half-upgraded database.
-                msg = (f"Database is still out of date after upgrade. "
-                       f"Head is {head_revision} and database is {db_version}.")
-                app.logger.error(msg)
-                raise RuntimeError(msg)
+                app.logger.info(f"Database out of date. Head is {head_revision} and "
+                                f"database is {db_version}.  Upgrading database...")
+                with app.app_context():
+                    unique_stamp = round(time() * 100)
+                    app.logger.info(f"Backing up database '{db_file}' to '{db_file}{unique_stamp}'.")
+                    shutil.copy(db_file, db_file + "_" + str(unique_stamp))
+                    flask_migrate.upgrade(mig_dir)
+                app.logger.info("Upgrade complete.  Validating version level...")
+
+                c.execute("SELECT version_num FROM alembic_version")
+                db_version = c.fetchone()[0]
+                app.logger.debug(f"Database version is: {db_version}")
+                if head_revision == db_version:
+                    app.logger.info("Database is now up to date")
+                else:
+                    # Migration ran but the DB is still not at head: stop rather
+                    # than fall through and use a half-upgraded database.
+                    msg = (f"Database is still out of date after upgrade. "
+                           f"Head is {head_revision} and database is {db_version}.")
+                    app.logger.error(msg)
+                    raise RuntimeError(msg)
 
 
 def arm_alembic_get():

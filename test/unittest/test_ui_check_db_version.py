@@ -18,6 +18,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, '/opt/arm')
 import arm.ui.utils as ui_utils          # noqa: E402
@@ -37,6 +38,44 @@ class TestCheckDbVersionUncreatable(unittest.TestCase):
                 self.fail(f"check_db_version raised UnboundLocalError: {e}")
             self.assertIsNone(result)
             self.assertFalse(os.path.isfile(bogus))
+
+
+class TestCheckDbVersionClosesConnection(unittest.TestCase):
+    """The sqlite connection opened to verify a freshly-created DB must be
+    closed (via contextlib.closing) on every exit path."""
+
+    def _run(self, head, db_ver):
+        install_path = cfg.arm_config['INSTALLPATH']
+        fake_conn = mock.MagicMock()
+        fake_conn.cursor.return_value.fetchone.return_value = (db_ver,)
+        # isfile: False on the create check, True after "upgrade" so we proceed.
+        isfile_returns = iter([False, True])
+        with mock.patch('sqlite3.connect', return_value=fake_conn), \
+             mock.patch.object(ui_utils.os.path, 'isfile',
+                               side_effect=lambda _p: next(isfile_returns)), \
+             mock.patch.object(ui_utils, 'make_dir'), \
+             mock.patch.object(ui_utils.shutil, 'copy'), \
+             mock.patch('flask_migrate.upgrade'), \
+             mock.patch('alembic.script.ScriptDirectory.from_config') as m_script:
+            m_script.return_value.get_current_head.return_value = head
+            raised = None
+            try:
+                ui_utils.check_db_version(install_path, "/tmp/fake_arm.db")
+            except RuntimeError as exc:
+                raised = exc
+        return fake_conn, raised
+
+    def test_connection_closed_on_up_to_date_path(self):
+        fake_conn, exc = self._run(head="rev1", db_ver="rev1")
+        self.assertIsNone(exc)
+        fake_conn.close.assert_called_once()
+
+    def test_connection_closed_even_when_it_raises(self):
+        # A persistent post-upgrade mismatch raises RuntimeError; the connection
+        # must still be closed by closing().
+        fake_conn, exc = self._run(head="rev2", db_ver="rev1")
+        self.assertIsInstance(exc, RuntimeError)
+        fake_conn.close.assert_called_once()
 
 
 if __name__ == '__main__':
